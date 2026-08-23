@@ -89,6 +89,29 @@ final class TimelineLocationCacheTests: XCTestCase {
         XCTAssertEqual(suggestion?.accuracyMeters, 3)
     }
 
+    /// `importSamples` binds one cached statement over every row of a ~180K-row export rather than
+    /// recompiling the SQL per row. A reused statement is only safe if each row rebinds all eight
+    /// arguments, so a nil altitude/accuracy after a populated one must read back as NULL rather
+    /// than inheriting the previous row's value.
+    func testNilAltitudeAfterAPopulatedRowInTheSameBatchStaysNil() async throws {
+        let cache = try makeCache()
+        try await cache.importSamples(
+            [
+                sample(timestampUTC: 1_000, altitudeMeters: 30, accuracyMeters: 5),
+                sample(timestampUTC: 2_000, latitude: 46.0, altitudeMeters: nil, accuracyMeters: nil),
+            ],
+            sourcePath: "/tmp/Timeline.json", sourceSize: 100, sourceModificationNanoseconds: 1,
+            sourceSHA256: "abc")
+
+        let populated = try await cache.suggestion(forCaptureTimestampUTC: 1_000)
+        let empty = try await cache.suggestion(forCaptureTimestampUTC: 2_000)
+
+        XCTAssertEqual(populated?.altitudeMeters, 30)
+        XCTAssertEqual(populated?.accuracyMeters, 5)
+        XCTAssertNil(empty?.altitudeMeters)
+        XCTAssertNil(empty?.accuracyMeters)
+    }
+
     func testIsImportNeededFalseAfterMatchingSignatureAlreadyImported() async throws {
         let cache = try makeCache()
         let neededBeforeImport = try await cache.isImportNeeded(

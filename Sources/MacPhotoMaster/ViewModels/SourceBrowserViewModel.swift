@@ -131,8 +131,11 @@ final class SourceBrowserViewModel: ObservableObject {
     /// change by `loadEditBuffer()` so a message from one photo never lingers under another.
     @Published var gpsSuggestionStatusMessage: String?
 
-    /// True while a manually-triggered `refreshTimeline()` Drive sync/import is in flight —
-    /// disables the "Refresh Timeline" button so it can't be fired twice concurrently.
+    /// True while *any* Timeline Drive sync/import is in flight — the silent one from launch and
+    /// folder-open as well as the explicit "Refresh Timeline" button. Disables that button, and
+    /// drives the toolbar spinner in `ContentView`: the launch import takes seconds on a large
+    /// export, and until it finishes GPS suggestions are simply absent, which reads as a broken
+    /// feature rather than a busy one.
     @Published private(set) var isSyncingTimeline = false
 
     /// Result text for a manually-triggered `refreshTimeline()` — e.g. "Imported 214 Timeline
@@ -1007,6 +1010,7 @@ final class SourceBrowserViewModel: ObservableObject {
     private enum TimelineSyncOutcome {
         case imported(sampleCount: Int)
         case upToDate
+        case alreadyRunning
         case sourceNotFound
         case failed
     }
@@ -1016,10 +1020,22 @@ final class SourceBrowserViewModel: ObservableObject {
     /// `TimelineLocationCache.isImportNeeded`. Shared by the silent per-launch/per-folder-load sync
     /// (`syncAndImportTimelineIfNeeded()`) and the explicit `refreshTimeline()` button action.
     private func performTimelineSync() async -> TimelineSyncOutcome {
+        // `load(_:)` fires this on every folder open, so without a guard, navigating during a
+        // launch import starts a second one over the same file — `isImportNeeded` stays true until
+        // the first finishes writing.
+        guard !isSyncingTimeline else { return .alreadyRunning }
+        isSyncingTimeline = true
+        defer { isSyncingTimeline = false }
+
         guard let localCopyPath = try? TimelineDriveSync.resolveLocalCopyPath() else { return .failed }
-        if let driveSourcePath = TimelineDriveSync.resolveDriveSourcePath() {
-            _ = try? TimelineDriveSync.syncIfNewer(driveSource: driveSourcePath, localCopy: localCopyPath)
-        }
+        // Globbing `~/Library/CloudStorage` and copying the export both hit a network-backed Drive
+        // mount, so they can stall for as long as Drive takes to answer — off the main actor, where
+        // a stall would be a frozen window rather than a slow spinner.
+        await Task.detached(priority: .userInitiated) {
+            if let driveSourcePath = TimelineDriveSync.resolveDriveSourcePath() {
+                _ = try? TimelineDriveSync.syncIfNewer(driveSource: driveSourcePath, localCopy: localCopyPath)
+            }
+        }.value
         guard FileManager.default.fileExists(atPath: localCopyPath.path) else { return .sourceNotFound }
         guard let cache = await ensureTimelineCache() else { return .failed }
 
@@ -1064,13 +1080,13 @@ final class SourceBrowserViewModel: ObservableObject {
     /// `syncAndImportTimelineIfNeeded()` but reports the outcome via `timelineSyncStatusMessage`
     /// instead of staying silent, since a user pressing a button expects to see what happened.
     func refreshTimeline() async {
-        isSyncingTimeline = true
-        defer { isSyncingTimeline = false }
         switch await performTimelineSync() {
         case .imported(let sampleCount):
             timelineSyncStatusMessage = "Imported \(sampleCount) Timeline point(s)."
         case .upToDate:
             timelineSyncStatusMessage = "Timeline is already up to date."
+        case .alreadyRunning:
+            timelineSyncStatusMessage = "Timeline import already running."
         case .sourceNotFound:
             timelineSyncStatusMessage = "No Timeline.json found."
         case .failed:

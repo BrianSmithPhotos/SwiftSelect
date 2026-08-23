@@ -460,10 +460,25 @@ it is the upsert key in `timelinePosition` — so `TimelineSampleRecordKeyTests`
 computed independently, and a rewrite that changed the key would re-import an unchanged export as a
 database full of new points rather than failing visibly.
 
+The write is the other half of the cost. `importSamples` upserts one row per sample, so its loop
+runs ~180K times on a real export; `Database.execute(sql:arguments:)` recompiles the SQL on every
+call, which measured as 10.0s of a 12.5s import against the real 77 MB export. Binding a single
+`db.cachedStatement` over the loop instead takes the same import to 2.5s. Reusing one statement is
+only correct if each row rebinds every argument, so `TimelineLocationCacheTests` pins that a nil
+altitude following a populated one reads back as NULL rather than inheriting its predecessor.
+
 Both apps run the parse and the file hash in a `Task.detached`. They are synchronous, second-scale
-work called from a `@MainActor` view model, so on the main actor they freeze the UI — on the iPad
-during the launch import, before there is anything on screen to explain the wait. The iPad shows a
-`ProgressView` in the toolbar while `isImportingTimeline` is true for the same reason.
+work called from a `@MainActor` view model, so on the main actor they freeze the UI — at launch,
+before there is anything on screen to explain the wait. The Mac additionally runs the Drive glob and
+the 77 MB `TimelineDriveSync.syncIfNewer` copy detached, since both reach into a network-backed
+`~/Library/CloudStorage` mount that can stall for as long as Google Drive takes to answer.
+
+Both apps show a `ProgressView` in the toolbar while an import is in flight — `isImportingTimeline`
+on the iPad, `isSyncingTimeline` on the Mac. Until it finishes, GPS suggestions are simply absent,
+which reads as a broken feature rather than a busy one. On the Mac that flag now covers the silent
+launch/folder-open sync as well as the explicit "Refresh Timeline" button, and doubles as the
+re-entrancy guard: `load(_:)` fires a sync on every folder open, and `isImportNeeded` stays true
+until the first import commits, so navigating mid-import would otherwise start a second one.
 
 ## Per-folder session state
 

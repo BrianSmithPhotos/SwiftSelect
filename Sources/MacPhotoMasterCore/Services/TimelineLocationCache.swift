@@ -95,22 +95,26 @@ public actor TimelineLocationCache {
             )
             let importID = db.lastInsertedRowID
 
+            // A Timeline export is ~180K rows, so this loop runs once per row: `db.execute(sql:)`
+            // would recompile the same SQL every time, which measured as most of a 10s import.
+            // `cachedStatement` compiles it once and just rebinds.
+            let upsert = try db.cachedStatement(
+                sql: """
+                    INSERT INTO timelinePosition (
+                        recordKey, timestampUTC, latitude, longitude,
+                        altitudeMeters, accuracyMeters, sourceType, importID
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(recordKey) DO UPDATE SET
+                        timestampUTC = excluded.timestampUTC,
+                        latitude = excluded.latitude,
+                        longitude = excluded.longitude,
+                        altitudeMeters = excluded.altitudeMeters,
+                        accuracyMeters = excluded.accuracyMeters,
+                        sourceType = excluded.sourceType,
+                        importID = excluded.importID
+                    """)
             for sample in samples {
-                try db.execute(
-                    sql: """
-                        INSERT INTO timelinePosition (
-                            recordKey, timestampUTC, latitude, longitude,
-                            altitudeMeters, accuracyMeters, sourceType, importID
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(recordKey) DO UPDATE SET
-                            timestampUTC = excluded.timestampUTC,
-                            latitude = excluded.latitude,
-                            longitude = excluded.longitude,
-                            altitudeMeters = excluded.altitudeMeters,
-                            accuracyMeters = excluded.accuracyMeters,
-                            sourceType = excluded.sourceType,
-                            importID = excluded.importID
-                        """,
+                try upsert.execute(
                     arguments: [
                         sample.recordKey, sample.timestampUTC, sample.latitude, sample.longitude,
                         sample.altitudeMeters, sample.accuracyMeters, sample.sourceType, importID,

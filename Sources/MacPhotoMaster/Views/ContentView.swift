@@ -25,6 +25,21 @@ struct ContentView: View {
                 .inspectorColumnWidth(min: 280, ideal: 320)
         }
         .toolbar {
+            // The launch import runs before the first folder has finished loading and takes
+            // seconds on a large export, with nothing else on screen to explain the wait — and GPS
+            // suggestions are simply absent until it finishes, so silence here reads as a broken
+            // feature rather than a busy one.
+            ToolbarItem {
+                if browser.isSyncingTimeline {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Timeline…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .help("Importing a new Timeline export - GPS suggestions arrive when it finishes")
+                }
+            }
             ToolbarItem {
                 Button {
                     isIPadImportPresented = true
