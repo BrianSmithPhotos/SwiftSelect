@@ -12,7 +12,7 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Dev
 
 APP_NAME="MacPhotoMaster"
 BUNDLE_ID="photos.briansmith.macphotomaster"
-ICON_SOURCE="icons/purplegreenswallow1024x1024.png"
+ICON_SOURCE="icons/AppIcon-1024.png"
 DERIVED_DATA_DIR=".build/xcodebuild-release"
 BUILD_DIR="$DERIVED_DATA_DIR/Build/Products/Release"
 DIST_DIR="dist"

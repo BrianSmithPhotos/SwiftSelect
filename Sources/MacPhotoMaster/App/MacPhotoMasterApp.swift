@@ -13,36 +13,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         // No `.app` bundle means no Info.plist `CFBundleIconFile` either, so the Dock/Cmd+Tab icon
-        // has to be set programmatically instead. Going through `applicationIconImage` also skips
-        // the automatic squircle-corner masking a bundled `.icns`/asset catalog icon would get, so
-        // `Self.roundedIcon` applies that mask by hand — otherwise the source PNG (a plain square
-        // photo, no built-in corner treatment) shows up as a hard-edged square in the Dock, unlike
-        // every other app there.
+        // has to be set programmatically instead. The PNG is used as it comes: `Tools/IconGen`
+        // draws it on the same 824/1024 icon grid every other Dock icon sits on, with the
+        // continuous-corner squircle and the drop shadow already in the image. Masking it here
+        // as well would inset it a second time and cut the squircle's corners off with a plain
+        // rounded rect.
         if let iconURL = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
             let icon = NSImage(contentsOf: iconURL)
         {
-            NSApp.applicationIconImage = Self.roundedIcon(from: icon)
+            NSApp.applicationIconImage = icon
         }
-    }
-
-    /// Clips `image` to macOS's app-icon proportions (per Apple's Big Sur+ icon grid: the visible
-    /// rounded shape is inset to ~824/1024 of the canvas, centered, with a ~183/824 corner radius)
-    /// so a plain full-bleed square source image reads as a normal Dock icon rather than looking
-    /// oversized next to every other app's icon, which already has this margin baked in.
-    private static func roundedIcon(from image: NSImage) -> NSImage {
-        let canvasSize = image.size
-        let insetSize = NSSize(width: canvasSize.width * (824.0 / 1024.0), height: canvasSize.height * (824.0 / 1024.0))
-        let origin = NSPoint(x: (canvasSize.width - insetSize.width) / 2, y: (canvasSize.height - insetSize.height) / 2)
-        let cornerRadius = insetSize.width * (183.0 / 824.0)
-
-        let rounded = NSImage(size: canvasSize)
-        rounded.lockFocus()
-        let path = NSBezierPath(
-            roundedRect: NSRect(origin: origin, size: insetSize), xRadius: cornerRadius, yRadius: cornerRadius)
-        path.addClip()
-        image.draw(in: NSRect(origin: origin, size: insetSize))
-        rounded.unlockFocus()
-        return rounded
     }
 }
 
