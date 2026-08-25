@@ -1,0 +1,15 @@
+{
+  "originHash" : "5631db1a7e451873630ddf74d5fd67a974571481a9c66df12253923997cc31ae",
+  "pins" : [
+    {
+      "identity" : "iconforge",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/BrianSmithPhotos/IconForge.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "e29cdbbf3f6c7d0dce817ca705140eda440d493d"
+      }
+    }
+  ],
+  "version" : 3
+}
