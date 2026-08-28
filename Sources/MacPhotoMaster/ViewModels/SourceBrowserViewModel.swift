@@ -1845,7 +1845,8 @@ final class SourceBrowserViewModel: ObservableObject {
                         title: nil, description: "", keywords: [result.token], gps: nil,
                         to: destination)
                 } catch {
-                    failures.append("\(target.url.lastPathComponent): \(error.localizedDescription)")
+                    failures.append(
+                        "\(target.url.lastPathComponent): \(FailureDiagnostics.describe(error))")
                 }
             }
 
@@ -1858,6 +1859,7 @@ final class SourceBrowserViewModel: ObservableObject {
                 ? "Developed \(successCount) RAW file(s)."
                 : "Developed \(successCount)/\(targets.count); \(failures.count) failed:\n"
                     + failures.joined(separator: "\n")
+                    + "\n\(FailureDiagnostics.resourceSnapshot())"
         }
     }
 
@@ -1910,7 +1912,8 @@ final class SourceBrowserViewModel: ObservableObject {
                         developedOriginals.append(original)
                     }
                 } catch {
-                    failures.append("\(asset.url.lastPathComponent): \(error.localizedDescription)")
+                    failures.append(
+                        "\(asset.url.lastPathComponent): \(FailureDiagnostics.describe(error))")
                 }
                 processedFileCount += 1
             }
@@ -1937,6 +1940,7 @@ final class SourceBrowserViewModel: ObservableObject {
                 processStatusMessage =
                     "Processed \(successCount)/\(assets.count) file(s); \(failures.count) failed:\n"
                     + failures.joined(separator: "\n")
+                    + "\n\(FailureDiagnostics.resourceSnapshot())"
             }
         }
     }

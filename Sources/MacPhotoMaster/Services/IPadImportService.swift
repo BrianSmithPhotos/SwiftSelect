@@ -149,7 +149,7 @@ struct IPadImportService {
         } catch {
             return IPadImportOutcome(
                 sourceName: sourceName, destinationURL: nil,
-                reason: "Could not read \(sidecarURL.lastPathComponent): \(error.localizedDescription)")
+                reason: "Could not read \(sidecarURL.lastPathComponent): \(FailureDiagnostics.describe(error))")
         }
 
         guard let parsedName = IPadExportNameParsing.parse(filename: sourceName) else {
@@ -202,7 +202,8 @@ struct IPadImportService {
                 developFailureReason: developed.failureReason)
         } catch {
             return IPadImportOutcome(
-                sourceName: sourceName, destinationURL: nil, reason: error.localizedDescription)
+                sourceName: sourceName, destinationURL: nil,
+                reason: FailureDiagnostics.describe(error))
         }
     }
 
@@ -225,7 +226,7 @@ struct IPadImportService {
         do {
             try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         } catch {
-            return (nil, error.localizedDescription)
+            return (nil, FailureDiagnostics.describe(error))
         }
         defer { try? FileManager.default.removeItem(at: scratch) }
 
@@ -266,7 +267,7 @@ struct IPadImportService {
                 asset: derived, renameContext: context, libraryRoot: libraryRoot)
             return (result.destinationURL, nil)
         } catch {
-            return (nil, error.localizedDescription)
+            return (nil, FailureDiagnostics.describe(error))
         }
     }
 

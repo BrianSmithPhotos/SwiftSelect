@@ -418,6 +418,22 @@ struct ExifToolClient: MetadataWriter {
             tryResume()
         }
 
+        /// The launch itself failed, so the three normal completion sources will never all report
+        /// in. Routed through the same `resumed` flag rather than resuming the continuation
+        /// directly at the call site: the two background reads are already dispatched by the time
+        /// `process.run()` can throw, and once their pipes hit EOF they would resume this same
+        /// continuation a second time — which traps.
+        func receiveLaunchFailure(_ error: Error) {
+            lock.lock()
+            guard !resumed else {
+                lock.unlock()
+                return
+            }
+            resumed = true
+            lock.unlock()
+            continuation.resume(throwing: error)
+        }
+
         private func tryResume() {
             lock.lock()
             guard !resumed, let stdoutData, let stderrData, let termination else {
@@ -459,10 +475,17 @@ struct ExifToolClient: MetadataWriter {
 
         /// Called from `terminationHandler`. Cancels the timeout (it's moot once the process has
         /// exited on its own) and reports whether the timeout had already fired.
+        ///
+        /// Dropping the reference matters as much as cancelling it. This object is captured by the
+        /// work item's block, so holding the item here is a retain cycle that `cancel()` does not
+        /// break: neither side is ever freed, and the block's other capture — the `Process`, and
+        /// through it both `Pipe`s — leaks its file descriptors for the life of the app. Measured
+        /// at two descriptors per timed run, which is every file the app writes.
         func cancelAndCheckTimedOut() -> Bool {
             lock.lock()
             defer { lock.unlock() }
             workItem?.cancel()
+            workItem = nil
             return didTimeOut
         }
     }
@@ -507,15 +530,25 @@ struct ExifToolClient: MetadataWriter {
             do {
                 try process.run()
                 if let timeoutSeconds {
-                    let workItem = DispatchWorkItem {
+                    // `[weak process]` so a finished run's descriptors come back immediately rather
+                    // than at the deadline: `asyncAfter` holds the work item until then even once
+                    // it is cancelled, and a strong capture would pin the process — and both pipes
+                    // — for the full timeout. A run that beat the clock leaves nothing to
+                    // terminate, so the optional is simply nil by then.
+                    let workItem = DispatchWorkItem { [weak process] in
                         timeoutState.markTimedOut()
-                        process.terminate()
+                        process?.terminate()
                     }
                     timeoutState.workItem = workItem
                     DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: workItem)
                 }
             } catch {
-                continuation.resume(throwing: error)
+                // The child never started, so nothing will ever close the write ends and the two
+                // reads above would block forever on their pipes, holding both descriptors and a
+                // dispatch thread each. Closing them here gives those reads their EOF.
+                try? stdoutPipe.fileHandleForWriting.close()
+                try? stderrPipe.fileHandleForWriting.close()
+                completion.receiveLaunchFailure(error)
             }
         }
     }
