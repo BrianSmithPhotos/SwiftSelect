@@ -428,6 +428,38 @@ single obvious cause. Resolve the real path once (check `PATH` first, then fall 
 `/opt/homebrew/bin/exiftool` / `/usr/local/bin/exiftool`) and launch that resolved path directly
 instead of going through `env`. See `ExifToolClient.exiftoolPath` for the reference implementation.
 
+### Give every run its descriptors back
+
+Each `Process` run here owns two `Pipe`s, and a pipe that is never released holds its file
+descriptors until the app quits. The app is long-lived by design — a card session can stay open for
+days across folder loads and new windows — so a per-run leak is not bounded by anything. Two
+descriptors per write was enough to reach the process's `RLIMIT_NOFILE` soft limit in 32 hours
+(August 2026), after which no further file could be processed.
+
+The trap is the write path's timeout. A `DispatchWorkItem` that terminates a slow run captures the
+`Process`, and `asyncAfter` holds that item until its deadline arrives whether or not it has been
+cancelled — so a strong capture pins the process and both its pipes for the full timeout even on a
+run that finished in milliseconds. Worse, an object that both holds the work item and is captured by
+its block is a retain cycle, and `cancel()` does not break it: nothing is ever freed. The two rules
+that follow, both in `ExifToolClient.run(arguments:timeoutSeconds:)`:
+
+- Capture the process **weakly** in the timeout block, and nil out the stored work item when the run
+  completes. Cancelling alone is not enough.
+- If `process.run()` **throws**, close both pipes' write ends before reporting the failure. The
+  background reads are already dispatched by then and nothing else will ever give them EOF, so each
+  one blocks forever on a descriptor and a dispatch thread. They also have to route their failure
+  through the same resume-once flag the normal path uses, or a late EOF resumes an already-resumed
+  continuation and traps.
+
+Descriptor exhaustion does not announce itself as exhaustion. Foundation's spawn path surfaces it as
+`NSPOSIXErrorDomain 9` — "The operation couldn't be completed. Bad file descriptor" — not the
+`EMFILE`/"Too many open files" you would look for, and the message names neither a syscall nor a
+file. `FailureDiagnostics` exists for exactly this: batch failure reports append each error's domain
+and code, and end with the process's own open-descriptor count against its soft limit, since that
+number cannot be recovered after the fact (a Dock-launched app starts at 256 and something in the
+stack raises it — measured at 4864, source unidentified). `lsof -F f -p <pid>` gives the same count
+from outside a live process.
+
 ## Local cache (Timeline GPS matching)
 
 The reference app caches an imported Google Timeline export in local SQLite for nearest-timestamp
