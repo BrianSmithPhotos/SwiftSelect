@@ -12,8 +12,14 @@ public enum AISuggestionSourcePicker {
 
     /// First non-JPEG (RAW) member by filename, falling back to `CaptureSet.representative` (first
     /// JPEG by filename, or the first member) when the set has no RAW file at all.
+    ///
+    /// Videos are never candidates, and this is the single seam that guarantees it for both the
+    /// Suggest button and a batch run: a `.MOV` is a non-JPEG, so the RAW-first rule above would
+    /// otherwise hand a clip to a vision model. A set holding nothing but video yields `nil`, which
+    /// every caller already reads as "nothing to send".
     public static func pickSourceAsset(from members: [PhotoAsset]) -> PhotoAsset? {
-        let sortedMembers = members.sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
+        let sortedMembers = members.filter { !$0.isVideo }
+            .sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
         if let raw = sortedMembers.first(where: { !jpegExtensions.contains($0.url.pathExtension.lowercased()) }) {
             return raw
         }

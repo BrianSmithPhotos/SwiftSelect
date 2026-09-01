@@ -27,6 +27,8 @@ deterministically, and copy files into local storage.
   Olympus bodies also write `.ori`: the same RAW format under a second extension, holding the
   un-composited original kept beside a hi-res or composite frame. It counts as a RAW, not a sidecar
   — missing it would leave those originals on the card when their frame is moved.
+- Videos (`.MOV`, `.MP4`) are browsed in the same grid, with the same Skip — see §9 for everything
+  that differs about them.
 - Thumbnails and full preview load off the main thread; RAW files fall back to the embedded
   preview JPEG (extracted via `exiftool -b -PreviewImage`) when no faster path exists.
 - **Capture-set grouping**: one set per press of the shutter, where a burst, a bracket, an in-camera
@@ -298,6 +300,7 @@ deterministically, and copy files into local storage.
   present on the source) long after the correct values were on disk. Any XMP sidecar produced by the
   write is renamed alongside it, since `foldInSidecarIfPresent` matches on basename.
 - Successfully processed files auto-skip from the current session view.
+- Videos take a different destination and none of the metadata work — see §9.
 - **iPad divergence:** the destination library is a fixed local folder inside the app's own sandbox
   (`Documents/ProcessedLibrary`), not user-picked — a Google-Drive-mounted destination was considered
   and ruled out (Drive's background sync could race with the copy+SHA-256 verify above). See
@@ -487,6 +490,58 @@ default settings, the point being Apple's engine applied to the file as the came
 - Any Timeline export JSON and any local location-cache database must be gitignored — never commit
   real location history.
 - No API keys or secrets committed; read from process environment.
+
+## 9. Videos
+
+Cards come back with clips on them as well as stills, and they have to be dealt with in the same
+pass — not left behind for a separate trip through Finder.
+
+- Videos (`.MOV`, `.MP4`) appear in the source grid alongside the photos, in capture-time order.
+  `AVFoundation` supplies the two things the grid needs: the clip's creation date and its duration
+  (there is no `CGImageSource` for a movie, so the still reader cannot see one at all). A clip with
+  no readable creation date falls back to the file's modification date.
+- The tile is a poster frame with a play badge and the running time on it.
+- Each clip is its own capture set, always. None of the six grouping checks (§1) can speak for a
+  video — no shot counter, no interval index, no render signature — and the one-second gap is
+  meaningless against a still shot while the camera was rolling.
+- The preview pane plays the clip, with transport controls. Deciding whether a clip is worth keeping
+  means watching it. Nothing autoplays.
+- Skip works exactly as it does for a photo: same per-folder store, same Active/Skipped filter.
+- No metadata. The metadata panel shows filename, duration and recorded time, and says where Process
+  will put the clip. There is nothing to edit, nothing to save, and no sidecar is ever written
+  beside a video.
+- Videos are never sent to an AI provider, and a set holding nothing but video is not a batch-run
+  target — so the button's count matches what a run will actually do.
+- **Process & Move** copies a clip to `~/videotmp/<batch>/`, keeping the camera's own filename
+  (`H1076833.MOV` stays `H1076833.MOV`) — the batch folder is what carries the session label. With
+  no batch label set, clips land loose in `~/videotmp/` itself, where a forgotten label is obvious
+  rather than hidden under an invented name. A name that is already taken gets `_1`, `_2` and so on:
+  the camera restarts its numbering, so two cards can carry the same filename into one batch.
+- The copy is verified the same way a photo's is — size plus SHA-256, into a hidden staging name,
+  renamed into place only once verified — and the source on the card is never touched. An 866 MB
+  clip off a card reader takes long enough that a watcher could otherwise read a partial file.
+- `~/videotmp` is a holding area for whatever editing tool takes the clips next, not a library:
+  there is no date routing, no rename and no metadata write, which is why videos are grouped by
+  batch rather than by capture date.
+
+### On the iPad
+
+The iPad cannot reach `~/videotmp` — it cannot reach anything outside its own sandbox — so Process
+stages a clip inside the same package the user already moves off the device, and the Mac's import
+finishes the move:
+
+    Documents/ProcessedLibrary/Videos/Skomer/H1076833.MOV    batch "Skomer"
+    Documents/ProcessedLibrary/Videos/H1076833.MOV           no batch set that session
+
+The batch label rides in the directory because the filename is reserved for the camera's own name.
+Staging uses the same copy-verify-rename as the final move; only the destination root differs.
+
+On the Mac side, "Import from iPad" recognises a clip by its type and routes it to
+`~/videotmp/<batch>/`, reading the batch back out of the folder it was staged under, and skipping
+everything the still path does to a file: no sidecar to fold in (there is none), no app-generated
+filename to parse, no maker notes, no RAW develop. It works whether the user copied the whole
+package across or just the one batch folder out of it. The staged copy is trashed once the move is
+verified, and the emptied folders are pruned with the rest.
 
 ## Ideas, not started
 

@@ -29,7 +29,9 @@ struct MetadataPanelView: View {
                 .font(.headline)
                 .padding([.top, .horizontal])
 
-            if let asset {
+            if let asset, asset.isVideo {
+                videoSummary(asset)
+            } else if let asset {
                 Form {
                     LabeledContent("Title", value: viewModel.titlePreview)
                     TextField("Description", text: $viewModel.editableDescription, axis: .vertical)
@@ -192,6 +194,31 @@ struct MetadataPanelView: View {
                 self.pendingProcessScope = nil
             }
         }
+    }
+
+    /// What a clip gets instead of the metadata form. Everything the form offers — description,
+    /// keywords, AI suggestions, GPS, save — writes EXIF/IPTC this app does not put into video, so
+    /// showing those controls greyed out would only invite the question of how to enable them.
+    /// What is left is the little a clip does carry, plus a plain statement of where Process & Move
+    /// will put it, since that destination is not the library folder the buttons below imply.
+    private func videoSummary(_ asset: PhotoAsset) -> some View {
+        Form {
+            LabeledContent("File", value: asset.url.lastPathComponent)
+            LabeledContent("Duration", value: VideoAssetReader.durationText(asset.videoDuration))
+            if let capturedAt = asset.capturedAt {
+                LabeledContent("Recorded", value: capturedAt.formatted())
+            }
+            Text(
+                "Videos carry no editable metadata. Process & Move copies this clip to "
+                    + VideoMoveService.destinationDirectory(
+                        batch: viewModel.sessionBatch,
+                        root: VideoMoveService.defaultDestinationRoot
+                    ).path + "."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .formStyle(.grouped)
     }
 
     private var saveSection: some View {

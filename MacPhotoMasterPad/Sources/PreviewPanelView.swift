@@ -25,7 +25,9 @@ struct PreviewPanelView: View {
         VStack(spacing: 8) {
             VStack {
                 Spacer()
-                if let previewImage {
+                if let asset, asset.isVideo {
+                    VideoPreviewView(url: asset.url)
+                } else if let previewImage {
                     if viewModel.subjectIsolationEnabled {
                         // Crop mode replaces the zoomable scroll view with a static, Fit-scaled canvas
                         // — pinch/pan off, same as the Mac (`PreviewPanelView.isZoomEnabled`) — because
@@ -76,7 +78,9 @@ struct PreviewPanelView: View {
             .task(id: asset?.id) {
                 previewImage = nil
                 previewFitMultiple = 1
-                guard let asset else { return }
+                // No still is loaded for a clip: `VideoPreviewView` owns that pane, and leaving
+                // `previewImage` nil is also what keeps the zoom readout off it.
+                guard let asset, !asset.isVideo else { return }
                 previewImage = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url, maxPixelSize: 2048)
             }
             // Crop mode can't be entered at a zoom level its coordinate mapping doesn't account for —
@@ -191,7 +195,7 @@ private struct FilmstripTileView: View {
         }
         .buttonStyle(.plain)
         .task(id: asset.id) {
-            thumbnail = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url, maxPixelSize: 160)
+            thumbnail = await MediaPreviewLoader.thumbnail(at: asset.url, maxPixelSize: 160)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(asset.url.lastPathComponent)

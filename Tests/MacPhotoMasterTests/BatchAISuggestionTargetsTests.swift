@@ -108,4 +108,38 @@ final class BatchAISuggestionTargetsTests: XCTestCase {
 
         XCTAssertTrue(targets.isEmpty)
     }
+    // MARK: - Videos
+
+    func testVideoOnlySetsAreNotTargets() {
+        let folder = [set("A.JPG"), set("H1076833.MOV"), set("B.JPG")]
+
+        let targets = BatchAISuggestionTargets.sets(
+            in: folder, multiSelectedRepresentativeIDs: [], redescribingDescribed: false)
+
+        XCTAssertEqual(names(targets), ["A.JPG", "B.JPG"])
+    }
+
+    /// A manual merge can put a clip and the stills shot around it into one set, and that set does
+    /// still have an image to describe.
+    func testASetHoldingAVideoAndAStillIsStillATarget() {
+        let mixed = CaptureSet(members: [
+            PhotoAsset(id: URL(fileURLWithPath: "/card/H1076833.MOV")),
+            PhotoAsset(id: URL(fileURLWithPath: "/card/A.JPG")),
+        ])
+
+        let targets = BatchAISuggestionTargets.sets(
+            in: [mixed], multiSelectedRepresentativeIDs: [], redescribingDescribed: false)
+
+        XCTAssertEqual(targets.count, 1)
+    }
+
+    func testAnExplicitSelectionOfVideosHasNothingToRun() {
+        let folder = [set("H1076833.MOV"), set("H1076834.MOV")]
+
+        let targets = BatchAISuggestionTargets.sets(
+            in: folder, multiSelectedRepresentativeIDs: representativeIDs(of: folder),
+            redescribingDescribed: false)
+
+        XCTAssertTrue(targets.isEmpty)
+    }
 }

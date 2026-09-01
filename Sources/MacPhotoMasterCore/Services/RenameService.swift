@@ -102,7 +102,11 @@ public struct RenameService {
     /// Trims outer whitespace, replaces filesystem-invalid characters and whitespace runs with a
     /// single `-`, collapses repeated `-`, strips leading/trailing `-`/`.`, and caps length —
     /// applied identically to the batch, camera, lens, and art-filter segments.
-    private static func sanitizeComponent(_ value: String) -> String {
+    ///
+    /// Public because `VideoMoveService` turns the same batch label into a *folder* name rather
+    /// than a filename segment, and the two must agree: a batch typed once should not produce
+    /// `Isle-of-Mull` in a photo's name and `Isle of Mull` as the video folder beside it.
+    public static func sanitizeComponent(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 

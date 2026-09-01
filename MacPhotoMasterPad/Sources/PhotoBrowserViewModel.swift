@@ -272,6 +272,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     private let grouping = CaptureGroupingService()
     private let renameService = RenameService()
     private let processMoveService = ProcessMoveService(metadataWriter: NativeMetadataWriter())
+    private let videoMoveService = VideoMoveService()
     private let timelineImportParser = TimelineImportParser()
     private let elevationService = ElevationLookupService()
     private let reverseGeocodeService = ReverseGeocodeService()
@@ -956,6 +957,10 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// `loadArtFilterTokens` step first: iPad has no exiftool, so `asset.artFilterToken` is whatever
     /// `NativeMetadataReader` already found — nothing, for Olympus maker notes, a pre-existing
     /// documented gap.
+    ///
+    /// A video takes the other branch: it has no metadata to fold in and no rename to do, so it is
+    /// staged under `IPadVideoBundle.stagingDirectory` inside the same package, carrying the batch
+    /// label in its folder for the Mac's import to redeem into `~/videotmp` (docs/SPEC.md §9).
     func process(scope: ProcessMoveScope) {
         guard !isProcessing else { return }
         let assets = scope.assets
@@ -978,7 +983,7 @@ final class PhotoBrowserViewModel: ObservableObject {
                 var asset = asset
                 processStatusMessage =
                     "Processing \(processedFileCount + 1) of \(assets.count): \(asset.url.lastPathComponent)"
-                if let draft = try? stagingStore.stagedDraft(for: asset.url) {
+                if !asset.isVideo, let draft = try? stagingStore.stagedDraft(for: asset.url) {
                     asset.descriptionText = draft.description
                     asset.keywords = draft.keywords
                     // Recover a GPS fix staged in an earlier session that this run's in-memory asset
@@ -989,16 +994,25 @@ final class PhotoBrowserViewModel: ObservableObject {
                         asset.gpsAltitude = gps.altitude
                     }
                 }
-                let context = RenameContext(
-                    sourceURL: asset.url,
-                    capturedAt: asset.capturedAt,
-                    cameraModel: asset.cameraModel,
-                    lensModel: asset.lensModel,
-                    batch: sessionBatch,
-                    artFilterToken: asset.artFilterToken)
                 do {
-                    _ = try await processMoveService.processAndCopy(
-                        asset: asset, renameContext: context, libraryRoot: libraryRootURL)
+                    if asset.isVideo {
+                        // Staged inside the package rather than moved: the iPad can't reach
+                        // ~/videotmp, so the Mac's import finishes the move. Same copy-verify-rename
+                        // as the Mac's, only the destination root differs.
+                        _ = try await videoMoveService.processAndCopy(
+                            asset: asset, batch: sessionBatch,
+                            destinationRoot: IPadVideoBundle.stagingRoot(in: libraryRootURL))
+                    } else {
+                        let context = RenameContext(
+                            sourceURL: asset.url,
+                            capturedAt: asset.capturedAt,
+                            cameraModel: asset.cameraModel,
+                            lensModel: asset.lensModel,
+                            batch: sessionBatch,
+                            artFilterToken: asset.artFilterToken)
+                        _ = try await processMoveService.processAndCopy(
+                            asset: asset, renameContext: context, libraryRoot: libraryRootURL)
+                    }
                     processedPaths.append(asset.url.path)
                 } catch {
                     failures.append("\(asset.url.lastPathComponent): \(error.localizedDescription)")

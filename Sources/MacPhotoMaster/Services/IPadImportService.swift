@@ -42,6 +42,10 @@ struct IPadImportSummary: Equatable {
 /// Lives in the app target rather than `MacPhotoMasterCore` because of that `ExifToolClient`
 /// dependency — exiftool doesn't exist on iOS, so this could never run on the iPad side.
 ///
+/// Videos ride along in the same package but never enter the library: they are moved to
+/// `~/videotmp/{BatchName}`, the batch read back out of the folder the iPad staged them under. See
+/// `IPadVideoBundle` and docs/SPEC.md §9.
+///
 /// Getting the files onto the Mac is deliberately not this service's problem: it takes a local
 /// folder, however it got there (Finder file sharing over USB, or the iPad's Files app sending them
 /// to a share). Either way the iPad keeps its copy — Files turns a cross-provider Move into a Copy —
@@ -49,6 +53,7 @@ struct IPadImportSummary: Equatable {
 struct IPadImportService {
     private let exifTool = ExifToolClient()
     private let processMoveService = ProcessMoveService(metadataWriter: ExifToolClient())
+    private let videoMoveService = VideoMoveService()
     private let assetLoader = PhotoAssetLoader()
 
     /// Imports every supported file under `exportRoot` into `libraryRoot`, reporting each file's
@@ -65,13 +70,18 @@ struct IPadImportService {
         let assets = try await assetLoader.loadAssets(inTree: exportRoot)
         guard !assets.isEmpty else { return IPadImportSummary() }
 
-        let makerNotes = await makerNoteFields(for: assets)
+        // Videos are excluded from the exiftool read: they carry none of the Olympus maker-note
+        // fields it is here to recover, and a batched read of 800 MB clips would be pure latency.
+        let makerNotes = await makerNoteFields(for: assets.filter { !$0.isVideo })
 
         Self.log.notice("Import started: \(assets.count) file(s) under \(exportRoot.path, privacy: .public)")
         var summary = IPadImportSummary()
         for asset in assets {
-            let outcome = await importOne(
-                asset, makerNotes: makerNotes[asset.url] ?? MakerNoteFields(), libraryRoot: libraryRoot)
+            let outcome = asset.isVideo
+                ? await importOneVideo(asset, exportRoot: exportRoot)
+                : await importOne(
+                    asset, makerNotes: makerNotes[asset.url] ?? MakerNoteFields(),
+                    libraryRoot: libraryRoot)
             Self.log(outcome)
             summary.outcomes.append(outcome)
             onProgress(summary.outcomes.count, assets.count, outcome)
@@ -129,6 +139,28 @@ struct IPadImportService {
                 artFilterToken: ArtFilterTokenParsing.token(from: metadata),
                 focusDistance: (metadata["Olympus:FocusDistance"] as? String) ?? "",
                 cameraLook: CameraLookParsing.parse(from: metadata))
+        }
+    }
+
+    /// Redeems a clip the iPad staged in the package: it goes to `~/videotmp/{BatchName}`, not into
+    /// the library, and none of the still path applies to it — no sidecar to fold in (there is no
+    /// metadata to carry), no app-generated filename to parse (the camera name was deliberately
+    /// kept), no maker notes, no develop. The batch label comes from the staging folder instead.
+    /// See docs/SPEC.md §9.
+    private func importOneVideo(_ asset: PhotoAsset, exportRoot: URL) async -> IPadImportOutcome {
+        let batch = IPadVideoBundle.batchLabel(for: asset.url, exportRoot: exportRoot)
+        do {
+            let result = try await videoMoveService.processAndCopy(
+                asset: asset, batch: batch,
+                destinationRoot: VideoMoveService.defaultDestinationRoot)
+            // No sidecar was ever written beside a clip, so there is nothing else to clear.
+            _ = try? FileManager.default.trashItem(at: asset.url, resultingItemURL: nil)
+            return IPadImportOutcome(
+                sourceName: asset.url.lastPathComponent, destinationURL: result.destinationURL)
+        } catch {
+            return IPadImportOutcome(
+                sourceName: asset.url.lastPathComponent, destinationURL: nil,
+                reason: FailureDiagnostics.describe(error))
         }
     }
 

@@ -277,13 +277,29 @@ private struct CaptureTileView: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if isSelectMode {
-                    Image(systemName: isMultiSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, isMultiSelected ? Color.accentColor : .black.opacity(0.35))
-                        .padding(6)
+                // One row rather than two corners: in select mode both marks want this corner, and
+                // a duration hidden behind a checkmark is the one thing a video tile has to say.
+                HStack(spacing: 4) {
+                    if isSelectMode {
+                        Image(systemName: isMultiSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, isMultiSelected ? Color.accentColor : .black.opacity(0.35))
+                    }
+                    if asset.isVideo {
+                        Label(
+                            VideoAssetReader.durationText(asset.videoDuration),
+                            systemImage: "play.fill"
+                        )
+                        .font(.system(size: 9, weight: .bold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.6), in: Capsule())
+                        .foregroundStyle(.white)
+                    }
                 }
+                .padding(6)
             }
             .overlay(alignment: .topTrailing) {
                 if isMarkedForRawDevelop {
@@ -324,7 +340,7 @@ private struct CaptureTileView: View {
                 }
             )
             .task(id: asset.id) {
-                thumbnail = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url, maxPixelSize: 256)
+                thumbnail = await MediaPreviewLoader.thumbnail(at: asset.url, maxPixelSize: 256)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(

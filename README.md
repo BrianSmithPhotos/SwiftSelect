@@ -87,6 +87,11 @@ Past the skeleton stage — the core ingest workflow from `docs/SPEC.md` works e
   filmstrip (`ProcessedStateStore`) so a re-opened folder still shows what's already gone through
   once — it never prevents reprocessing. Auto-skipping successfully processed files (per
   `docs/SPEC.md` §5) isn't wired yet.
+- **Videos** (§9): clips on the card (`.MOV`, `.MP4`) browse in the same grid — poster-frame tile
+  with a play/duration badge, a real player in the preview pane, the same Skip — and Process & Move
+  copies them, verified and under the camera's own filename, to `~/videotmp/<batch>/` rather than
+  into the library. No metadata, and never sent to an AI provider. On iPad they are staged inside
+  the Process package under a batch-named folder for the Mac's import to move across.
 - **RAW develop** (§5): right-click a capture set or a RAW in the filmstrip → Develop RAW renders a
   JPEG variant with Apple's RAW engine and joins it to the capture set. Decoder chosen per file: the
   newest one the file itself reaches, or via a temporary DNG for a camera that decoder doesn't list

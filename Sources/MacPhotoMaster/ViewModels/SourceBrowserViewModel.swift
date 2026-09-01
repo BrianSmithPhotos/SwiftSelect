@@ -243,6 +243,7 @@ final class SourceBrowserViewModel: ObservableObject {
     private let grouping = CaptureGroupingService()
     private let exifTool = ExifToolClient()
     private let processMoveService = ProcessMoveService(metadataWriter: ExifToolClient())
+    private let videoMoveService = VideoMoveService()
     private let renameService = RenameService()
     private let timelineImportParser = TimelineImportParser()
     private let elevationService = ElevationLookupService()
@@ -1893,20 +1894,32 @@ final class SourceBrowserViewModel: ObservableObject {
         processStatusMessage = "Reading metadata for \(assets.count) file(s)…"
         Task {
             defer { isProcessing = false }
-            await loadArtFilterTokens(for: assets)
+            // Videos are excluded: exiftool has nothing to say about a `.MOV` that this app uses,
+            // and the read is one launch per batch of files that would otherwise be wasted on them.
+            await loadArtFilterTokens(for: assets.filter { !$0.isVideo })
             let assetByID = Dictionary(
                 uniqueKeysWithValues: captureSets.flatMap(\.members).map { ($0.id, $0) })
             var failures: [String] = []
             var processedPaths: [String] = []
             var developedOriginals: [URL] = []
+            var movedVideoCount = 0
             for asset in assets {
                 let asset = assetByID[asset.id] ?? asset
                 processStatusMessage =
                     "Processing \(processedFileCount + 1) of \(assets.count): \(asset.url.lastPathComponent)"
-                let context = Self.renameContext(for: asset, batch: sessionBatch)
                 do {
-                    _ = try await processMoveService.processAndCopy(
-                        asset: asset, renameContext: context, libraryRoot: libraryRoot)
+                    // A video takes the other route entirely — no rename, no metadata, no library
+                    // routing, just a verified copy into its batch folder (docs/SPEC.md §9).
+                    if asset.isVideo {
+                        _ = try await videoMoveService.processAndCopy(
+                            asset: asset, batch: sessionBatch,
+                            destinationRoot: VideoMoveService.defaultDestinationRoot)
+                        movedVideoCount += 1
+                    } else {
+                        let context = Self.renameContext(for: asset, batch: sessionBatch)
+                        _ = try await processMoveService.processAndCopy(
+                            asset: asset, renameContext: context, libraryRoot: libraryRoot)
+                    }
                     processedPaths.append(asset.url.path)
                     if let original = asset.derivedFrom {
                         developedOriginals.append(original)
@@ -1934,15 +1947,26 @@ final class SourceBrowserViewModel: ObservableObject {
                 load(URL(fileURLWithPath: folderPath), preservingSelection: true)
             }
             let successCount = assets.count - failures.count
+            let videoNote = Self.videoDestinationNote(count: movedVideoCount, batch: sessionBatch)
             if failures.isEmpty {
-                processStatusMessage = "Processed \(successCount) file(s)."
+                processStatusMessage = "Processed \(successCount) file(s)." + videoNote
             } else {
                 processStatusMessage =
                     "Processed \(successCount)/\(assets.count) file(s); \(failures.count) failed:\n"
                     + failures.joined(separator: "\n")
-                    + "\n\(FailureDiagnostics.resourceSnapshot())"
+                    + "\n\(FailureDiagnostics.resourceSnapshot())" + videoNote
             }
         }
+    }
+
+    /// Names where the videos went, because it isn't the library folder the user picked and a run
+    /// that silently put files somewhere else would be indistinguishable from one that dropped
+    /// them. Says nothing when the scope held no videos, which is most runs.
+    private static func videoDestinationNote(count: Int, batch: String) -> String {
+        guard count > 0 else { return "" }
+        let directory = VideoMoveService.destinationDirectory(
+            batch: batch, root: VideoMoveService.defaultDestinationRoot)
+        return " Moved \(count) video(s) to \(directory.path)."
     }
 
     /// Imports a folder of iPad-processed files into `libraryRootURL` via `IPadImportService` — see

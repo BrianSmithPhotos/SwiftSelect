@@ -219,6 +219,24 @@ private struct CaptureTileView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 3)
                 }
+                .overlay(alignment: .topLeading) {
+                    // Top-left, clear of the member-count and processed badges along the bottom.
+                    // A poster frame is a still like any other, so without this a clip is
+                    // indistinguishable from a photo until it is selected.
+                    if asset.isVideo {
+                        Label(
+                            VideoAssetReader.durationText(asset.videoDuration),
+                            systemImage: "play.fill"
+                        )
+                        .font(.system(size: 8, weight: .bold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.6), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(4)
+                    }
+                }
                 .overlay(alignment: .bottomTrailing) {
                     if memberCount > 1 {
                         Text("\(memberCount)")
@@ -255,7 +273,7 @@ private struct CaptureTileView: View {
         // could leave a stale thumbnail decode from a previous asset finishing after this tile
         // was reassigned to a new one.
         .task(id: asset.id) {
-            thumbnail = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url, maxPixelSize: 256)
+            thumbnail = await MediaPreviewLoader.thumbnail(at: asset.url, maxPixelSize: 256)
         }
         // Without this, VoiceOver (and UI-automation hit-testing) only see the badge Text as a
         // leaf element with a bogus position inside the LazyVGrid's virtualized content — not the

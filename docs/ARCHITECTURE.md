@@ -263,6 +263,39 @@ A fourth job was added later: redeeming the iPad's **RAW develop marker** (see b
 same shape — read something out of the sidecar, act on it, hand the result to the ordinary
 `ProcessMoveService` — so it is a second `processAndCopy` call rather than a new pipeline.
 
+Videos are the one file type that leaves this path entirely: a clip goes to `~/videotmp/<batch>/` via
+`VideoMoveService`, not into the library, and none of the three pieces above apply to it. See
+"Videos" below.
+
+## Videos
+
+A video rides inside the ordinary `PhotoAsset` rather than in a parallel model type, so skip state,
+capture sets, multi-select, processed state and the grid all keep working with no branching:
+`PhotoAsset.isVideo` and `videoDuration` are the whole of the addition. Four Core pieces carry the
+rest (SPEC.md §9):
+
+- **`VideoAssetReader`** reads creation date and duration through `AVFoundation` and renders poster
+  frames. A `.MOV` has no `CGImageSource` at all, so `NativeMetadataReader` cannot see one.
+- **`MediaPreviewLoader`** is the single seam the tile and filmstrip call, so no view has to branch
+  on media type to get a thumbnail.
+- **`VideoMoveService`** owns the destination. Kept apart from `ProcessMoveService` rather than
+  branching inside it, because a clip shares none of what that service exists to do — no date
+  routing, no rename, no title, no metadata write, and so none of the staging-then-annotate
+  sequencing those need. What the two do share is `CopyVerification` (size + SHA-256), extracted from
+  `ProcessMoveService` so the copy rule lives in one place for both destinations.
+- **`IPadVideoBundle`** is the format of the staged-video subtree the iPad writes and the Mac reads
+  back, both ends expressed through `VideoMoveService.destinationDirectory` so the folder names
+  cannot drift apart.
+
+Videos are excluded at the seams rather than at every call site: `AISuggestionSourcePicker` filters
+them before its RAW-first pick (a `.MOV` is a non-JPEG, so the rule would otherwise prefer one), and
+`BatchAISuggestionTargets.isVideoOnly` keeps video-only sets out of a batch run's count.
+
+`CaptureGroupingService.group` splits stills from videos, groups the stills through the existing six
+checks, and merges the two already-chronological lists with an explicit two-list merge — not by
+sorting the concatenation, since `Array.sort` is not guaranteed stable and two still sets can
+legitimately start in the same second.
+
 ## RAW develop
 
 `RawDevelopService` (Core) renders a RAW to a JPEG via `CIRAWFilter` +

@@ -4,8 +4,8 @@ public enum PhotoAssetLoaderError: Error, Equatable {
     case unreadableFolder(URL)
 }
 
-/// Scans a folder for supported image files and reads their metadata. See docs/SPEC.md §1 for
-/// supported file types.
+/// Scans a folder for supported image and video files and reads their metadata. See docs/SPEC.md
+/// §1 for supported file types.
 ///
 /// Uses `NativeMetadataReader` rather than `ExifToolClient` for this pass: ImageIO has no
 /// external-process cost, so there's no batching concern the way there is for exiftool (see
@@ -29,10 +29,22 @@ public struct PhotoAssetLoader {
     /// moving the frame they belong to.
     public static let rawExtensions: Set<String> = ["orf", "ori", "raf"]
 
-    public static let supportedExtensions: Set<String> = Set(["jpg", "jpeg"]).union(rawExtensions)
+    /// Video formats the app browses. The OM-3 writes `.mov`; `.mp4` is here because every other
+    /// camera and phone writes that instead, and both are containers AVFoundation reads natively.
+    ///
+    /// A video is browsed and skipped exactly like a still, but it is never edited and never routed
+    /// into the photo library — see docs/SPEC.md §9 and `VideoMoveService`.
+    public static let videoExtensions: Set<String> = ["mov", "mp4"]
+
+    public static let supportedExtensions: Set<String> =
+        Set(["jpg", "jpeg"]).union(rawExtensions).union(videoExtensions)
 
     public static func isRaw(_ url: URL) -> Bool {
         rawExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    public static func isVideo(_ url: URL) -> Bool {
+        videoExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// Caps how many files are read at once. Each `NativeMetadataReader` read is CPU-bound
@@ -53,9 +65,9 @@ public struct PhotoAssetLoader {
         try await Task.detached(priority: .userInitiated) {
             let contents = try FileManager.default.contentsOfDirectory(
                 at: folderURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-            let imageURLs = contents.filter { Self.supportedExtensions.contains($0.pathExtension.lowercased()) }
+            let mediaURLs = contents.filter { Self.supportedExtensions.contains($0.pathExtension.lowercased()) }
 
-            return await Self.readAssets(at: imageURLs)
+            return await Self.readAssets(at: mediaURLs)
         }.value
     }
 
@@ -81,10 +93,10 @@ public struct PhotoAssetLoader {
                 throw PhotoAssetLoaderError.unreadableFolder(folderURL)
             }
 
-            let imageURLs = enumerator.compactMap { $0 as? URL }
+            let mediaURLs = enumerator.compactMap { $0 as? URL }
                 .filter { Self.supportedExtensions.contains($0.pathExtension.lowercased()) }
 
-            return await Self.readAssets(at: imageURLs).sorted { $0.url.path < $1.url.path }
+            return await Self.readAssets(at: mediaURLs).sorted { $0.url.path < $1.url.path }
         }.value
     }
 
@@ -104,6 +116,9 @@ public struct PhotoAssetLoader {
                 let url = urls[nextIndex]
                 nextIndex += 1
                 group.addTask {
+                    // A video has no `CGImageSource`, so the ImageIO reader can't see one at all —
+                    // routed to AVFoundation rather than being dropped as unreadable.
+                    if isVideo(url) { return await VideoAssetReader().loadAsset(at: url) }
                     let reader = NativeMetadataReader()
                     guard let metadata = try? reader.readMetadata(at: url) else { return nil }
                     return reader.mapToPhotoAsset(url: url, metadata: metadata)

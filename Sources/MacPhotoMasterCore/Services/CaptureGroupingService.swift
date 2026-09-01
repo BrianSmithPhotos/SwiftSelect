@@ -21,10 +21,50 @@ public struct CaptureGroupingService {
     ///
     /// Assets with no readable capture time each become their own singleton set — there's nothing
     /// to group them by — and those sort after every timestamped set rather than being dropped.
+    ///
+    /// Videos never take part in any of it. None of the six checks can speak for one: a clip
+    /// carries no shot counter, no interval index and no render signature, and the gap is
+    /// meaningless against a still shot while the camera was rolling. Each clip is its own set,
+    /// merged back into the timeline by its own start time so the grid still reads chronologically.
     public func group(_ assets: [PhotoAsset], signals: [URL: CaptureSignals] = [:]) -> [CaptureSet] {
+        let stills = assets.filter { !$0.isVideo }
+        let videoSets = assets.filter { $0.isVideo && $0.capturedAt != nil }
+            .sorted { ($0.capturedAt ?? .distantPast) < ($1.capturedAt ?? .distantPast) }
+            .map { CaptureSet(members: [$0]) }
+        return Self.merged(
+            stillSets: self.groupStills(stills, signals: signals), videoSets: videoSets)
+            + assets.filter { $0.capturedAt == nil }.map { CaptureSet(members: [$0]) }
+    }
+
+    /// Interleaves two already-chronological lists into one. An explicit merge rather than sorting
+    /// the concatenation: `Array.sort` isn't guaranteed stable, and two still sets can legitimately
+    /// start in the same second (check 6 exists precisely for that), so a sort could reorder them.
+    private static func merged(stillSets: [CaptureSet], videoSets: [CaptureSet]) -> [CaptureSet] {
+        var merged: [CaptureSet] = []
+        merged.reserveCapacity(stillSets.count + videoSets.count)
+        var stillIndex = 0
+        var videoIndex = 0
+        while stillIndex < stillSets.count && videoIndex < videoSets.count {
+            if startTime(of: videoSets[videoIndex]) < startTime(of: stillSets[stillIndex]) {
+                merged.append(videoSets[videoIndex])
+                videoIndex += 1
+            } else {
+                merged.append(stillSets[stillIndex])
+                stillIndex += 1
+            }
+        }
+        return merged + stillSets[stillIndex...] + videoSets[videoIndex...]
+    }
+
+    private static func startTime(of captureSet: CaptureSet) -> Date {
+        captureSet.members.compactMap(\.capturedAt).min() ?? .distantPast
+    }
+
+    /// The six checks, applied to stills only. Returns chronological sets, excluding anything with
+    /// no readable capture time — `group(_:signals:)` owns that tail.
+    private func groupStills(_ assets: [PhotoAsset], signals: [URL: CaptureSignals]) -> [CaptureSet] {
         var frames = Self.frames(from: assets, signals: signals)
-        let untimed = assets.filter { $0.capturedAt == nil }
-        guard !frames.isEmpty else { return untimed.map { CaptureSet(members: [$0]) } }
+        guard !frames.isEmpty else { return [] }
 
         var sets: [CaptureSet] = []
         var previous = frames.removeFirst()
@@ -45,7 +85,7 @@ public struct CaptureGroupingService {
             }
         }
         sets.append(CaptureSet(members: run.flatMap(\.members)))
-        return sets + untimed.map { CaptureSet(members: [$0]) }
+        return sets
     }
 
     /// The six checks, in order, deciding whether `next` opens a new capture set after `previous`.

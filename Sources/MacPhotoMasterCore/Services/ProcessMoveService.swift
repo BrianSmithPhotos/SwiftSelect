@@ -79,7 +79,7 @@ public struct ProcessMoveService {
         let cameraLook = AutoMetadataRules.cameraLookInstructions(for: asset)
 
         do {
-            try Self.verifyCopy(source: asset.url, destination: stagingURL)
+            try CopyVerification.verify(source: asset.url, destination: stagingURL)
             try await metadataWriter.write(
                 title: title,
                 description: description,
@@ -137,22 +137,6 @@ public struct ProcessMoveService {
     private static func existingFileNames(in directory: URL) -> Set<String> {
         let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
         return Set(names ?? [])
-    }
-
-    private static func verifyCopy(source: URL, destination: URL) throws {
-        let sourceSize = try fileSize(at: source)
-        let destinationSize = try fileSize(at: destination)
-        guard sourceSize == destinationSize else {
-            throw ProcessMoveError.copySizeMismatch(source: source, destination: destination)
-        }
-        guard try FileHashing.sha256(of: source) == FileHashing.sha256(of: destination) else {
-            throw ProcessMoveError.copyChecksumMismatch(source: source, destination: destination)
-        }
-    }
-
-    private static func fileSize(at url: URL) throws -> Int {
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        return (attributes[.size] as? Int) ?? 0
     }
 
     /// On iPad there's no exiftool, so `NativeMetadataWriter` puts the metadata in a `.xmp` sidecar

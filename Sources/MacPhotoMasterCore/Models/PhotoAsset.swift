@@ -45,4 +45,14 @@ public struct PhotoAsset: Identifiable, Hashable {
     /// lives under a staging key, whose digits `RenameService.sequence(from:)` would otherwise
     /// harvest), and it keys `RawDerivedStore`.
     public var derivedFrom: URL?
+
+    /// Length in seconds of a video, `nil` for every still. The only field a `.MOV` fills that a
+    /// photo doesn't — see `VideoAssetReader` for why a video is carried as a `PhotoAsset` rather
+    /// than as a type of its own.
+    public var videoDuration: TimeInterval?
+
+    /// Whether this is a video rather than a still, decided by extension alone
+    /// (`PhotoAssetLoader.videoExtensions`). Videos browse, preview and skip like stills, but carry
+    /// no editable metadata and process to their own destination — see docs/SPEC.md §9.
+    public var isVideo: Bool { PhotoAssetLoader.isVideo(url) }
 }

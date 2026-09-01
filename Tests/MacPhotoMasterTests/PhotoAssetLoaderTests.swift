@@ -64,6 +64,22 @@ final class PhotoAssetLoaderTests: XCTestCase {
         XCTAssertFalse(PhotoAssetLoader.isRaw(URL(fileURLWithPath: "/x/P1010042.JPG")))
     }
 
+    /// Same pairing as the RAW check above: the folder scan filters on `supportedExtensions`, and
+    /// everything downstream asks `isVideo` which route a file takes, so the two must agree.
+    func testVideoExtensionsAreAllSupportedAndRecognisedAsVideo() {
+        XCTAssertTrue(PhotoAssetLoader.videoExtensions.isSubset(of: PhotoAssetLoader.supportedExtensions))
+        XCTAssertEqual(PhotoAssetLoader.videoExtensions, ["mov", "mp4"])
+        for extension_ in PhotoAssetLoader.videoExtensions {
+            XCTAssertTrue(PhotoAssetLoader.isVideo(URL(fileURLWithPath: "/card/H1076833.\(extension_)")))
+        }
+    }
+
+    /// The camera writes `.MOV` in caps.
+    func testVideoRecognitionIsCaseInsensitive() {
+        XCTAssertTrue(PhotoAssetLoader.isVideo(URL(fileURLWithPath: "/card/H1076833.MOV")))
+        XCTAssertFalse(PhotoAssetLoader.isVideo(URL(fileURLWithPath: "/card/P1010042.ORF")))
+    }
+
     func testLoadAssetsReturnsEmptyArrayForFolderWithNoSupportedFiles() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

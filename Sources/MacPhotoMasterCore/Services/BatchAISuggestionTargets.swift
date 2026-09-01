@@ -24,9 +24,19 @@ public enum BatchAISuggestionTargets {
             guard let representativeID = set.representative?.id else { return false }
             return multiSelectedRepresentativeIDs.contains(representativeID)
         }
-        let candidates = selected.count > 1 ? selected : captureSets
+        // A set with no still in it has no image to send, so it would burn a slot in the progress
+        // bar to do nothing. Excluded here rather than skipped mid-run so the button's count is
+        // what the run will actually do.
+        let candidates = (selected.count > 1 ? selected : captureSets).filter { !isVideoOnly($0) }
         guard !redescribingDescribed else { return candidates }
         return candidates.filter { !hasDescription($0) }
+    }
+
+    /// Whether a set holds nothing but video. Written over every member rather than checking the
+    /// one clip a video set normally is, because a manual merge can put a clip and the stills shot
+    /// around it into a single set — and that set does still have an image to describe.
+    public static func isVideoOnly(_ captureSet: CaptureSet) -> Bool {
+        !captureSet.members.isEmpty && captureSet.members.allSatisfy(\.isVideo)
     }
 
     /// Whether a set counts as already described. Any member with description text does it, not just

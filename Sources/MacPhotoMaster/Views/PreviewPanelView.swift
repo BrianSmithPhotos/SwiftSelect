@@ -89,7 +89,12 @@ struct PreviewPanelView: View {
             // its right edge whenever the image fitted on height.
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                if let previewImage {
+                if let asset, asset.isVideo {
+                    // Ahead of the `previewImage` branch, and never loading one: zoom, the crop
+                    // overlay and the look strip all read a still, and none of them mean anything
+                    // against a clip.
+                    VideoPreviewView(url: asset.url)
+                } else if let previewImage {
                     if isZoomEnabled {
                         ZoomableImageView(
                             image: previewImage, fitMultiple: $previewFitMultiple,
@@ -151,7 +156,7 @@ struct PreviewPanelView: View {
             }
             .task(id: asset?.id) {
                 previewImage = nil
-                guard let asset else { return }
+                guard let asset, !asset.isVideo else { return }
                 previewImage = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url, maxPixelSize: 2048)
             }
             // Crop mode can't be entered at a zoom level its coordinate mapping doesn't account for.
@@ -281,7 +286,7 @@ private struct VariantTileView: View {
         }
         .buttonStyle(.plain)
         .task(id: asset.id) {
-            thumbnail = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url, maxPixelSize: 160)
+            thumbnail = await MediaPreviewLoader.thumbnail(at: asset.url, maxPixelSize: 160)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("variantTile.\(asset.id.lastPathComponent)")

@@ -259,4 +259,50 @@ final class CaptureGroupingServiceTests: XCTestCase {
         XCTAssertEqual(sets.count, 1)
         XCTAssertEqual(sets[0].members.count, 4)
     }
+    // MARK: - Videos
+
+    /// None of the six checks can speak for a clip, so it is never folded in with the stills around
+    /// it — not even one shot inside the same second the camera started rolling.
+    func testAVideoIsAlwaysItsOwnSet() {
+        let still = asset("A.jpg", capturedAt: base)
+        let clip = asset("H1076833.mov", capturedAt: base.addingTimeInterval(0.2))
+
+        let sets = service.group([still, clip])
+
+        XCTAssertEqual(stems(sets), [["A.jpg"], ["H1076833.mov"]])
+    }
+
+    func testTwoVideosNeverGroupTogetherHoweverCloseTheyAre() {
+        let first = asset("H1076833.mov", capturedAt: base)
+        let second = asset("H1076834.mov", capturedAt: base.addingTimeInterval(0.1))
+
+        XCTAssertEqual(service.group([first, second]).count, 2)
+    }
+
+    func testVideosAreInterleavedIntoTheStillsByStartTime() {
+        let sets = service.group([
+            asset("B.jpg", capturedAt: base.addingTimeInterval(20)),
+            asset("H1076833.mov", capturedAt: base.addingTimeInterval(10)),
+            asset("A.jpg", capturedAt: base),
+        ])
+
+        XCTAssertEqual(stems(sets), [["A.jpg"], ["H1076833.mov"], ["B.jpg"]])
+    }
+
+    /// A card of nothing but clips still has to come back grouped and in order — the stills path
+    /// returning no sets at all must not swallow the videos with it.
+    func testACardOfOnlyVideosStillGroups() {
+        let sets = service.group([
+            asset("H1076834.mov", capturedAt: base.addingTimeInterval(10)),
+            asset("H1076833.mov", capturedAt: base),
+        ])
+
+        XCTAssertEqual(stems(sets), [["H1076833.mov"], ["H1076834.mov"]])
+    }
+
+    func testAVideoWithNoReadableStartTimeStillAppears() {
+        let sets = service.group([asset("A.jpg", capturedAt: base), asset("H1076833.mov", capturedAt: nil)])
+
+        XCTAssertEqual(stems(sets), [["A.jpg"], ["H1076833.mov"]])
+    }
 }

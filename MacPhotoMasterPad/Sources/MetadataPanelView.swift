@@ -42,7 +42,9 @@ struct MetadataPanelView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let asset {
+                if let asset, asset.isVideo {
+                    videoSummary(asset)
+                } else if let asset {
                     Form {
                         Section("Title & Description") {
                             LabeledContent("Title", value: viewModel.titlePreview)
@@ -202,43 +204,7 @@ struct MetadataPanelView: View {
                                 }
                             }
                         }
-                        Section("Process & Move") {
-                            LabeledContent("Library Folder", value: viewModel.libraryRootURL.lastPathComponent)
-
-                            Button("Process (This File)") {
-                                viewModel.process(scope: .singleAsset(asset))
-                            }
-                            .disabled(viewModel.isProcessing)
-
-                            Button("Process (Capture Set)") {
-                                guard let captureSet = viewModel.selectedCaptureSet else { return }
-                                viewModel.process(scope: .captureSet(captureSet))
-                            }
-                            .disabled(viewModel.selectedCaptureSet == nil || viewModel.isProcessing)
-
-                            Button("Process (Current Selection)") {
-                                let assets = viewModel.manualSelectionAssets
-                                guard !assets.isEmpty else { return }
-                                viewModel.process(scope: .manualSelection(assets))
-                            }
-                            .disabled(!viewModel.hasMultiSelection || viewModel.isProcessing)
-
-                            Button("Process (Session)") {
-                                viewModel.process(scope: .session(viewModel.captureSets))
-                            }
-                            .disabled(viewModel.captureSets.isEmpty || viewModel.isProcessing)
-
-                            if viewModel.isProcessing {
-                                ProgressView(
-                                    value: Double(viewModel.processedFileCount),
-                                    total: Double(max(viewModel.processTotalCount, 1)))
-                            }
-                            if let processStatusMessage = viewModel.processStatusMessage {
-                                Text(processStatusMessage)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                        processMoveSection(asset)
                     }
                 } else {
                     ContentUnavailableView(
@@ -254,8 +220,81 @@ struct MetadataPanelView: View {
             // for whatever GPS the photo now has (embedded or just-suggested). Both self-guard to no-op
             // once already applied.
             .task(id: asset?.id) {
+                // A clip has no metadata to enrich, and no GPS field to put a fix in.
+                guard asset?.isVideo != true else { return }
                 await viewModel.suggestGPSIfNeeded()
                 await viewModel.lookupLocationKeywordsIfNeeded()
+            }
+        }
+    }
+
+    /// Everything a video can say for itself, in place of the editable form: a clip carries no
+    /// title, description, keywords or GPS to write, and nothing on the iPad could write them if it
+    /// did. Process & Move still applies — that is the whole point of showing videos here — so the
+    /// batch field comes along, since it names the folder the clip lands in (docs/SPEC.md §9).
+    @ViewBuilder
+    private func videoSummary(_ asset: PhotoAsset) -> some View {
+        Form {
+            Section("Video") {
+                LabeledContent("File", value: asset.url.lastPathComponent)
+                LabeledContent("Duration", value: VideoAssetReader.durationText(asset.videoDuration))
+                if let capturedAt = asset.capturedAt {
+                    LabeledContent("Recorded", value: capturedAt.formatted())
+                }
+                TextField("Batch", text: $viewModel.sessionBatch)
+                Text(
+                    "Videos carry no editable metadata. Process stages this clip in "
+                        + IPadVideoBundle.stagingDirectory(
+                            libraryRoot: viewModel.libraryRootURL, batch: viewModel.sessionBatch
+                        ).lastPathComponent
+                        + " for the Mac to move into ~/videotmp."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            processMoveSection(asset)
+        }
+    }
+
+    /// The Process & Move controls, shared by the still form and the video summary so the two can
+    /// never offer different scopes.
+    @ViewBuilder
+    private func processMoveSection(_ asset: PhotoAsset) -> some View {
+        Section("Process & Move") {
+            LabeledContent("Library Folder", value: viewModel.libraryRootURL.lastPathComponent)
+
+            Button("Process (This File)") {
+                viewModel.process(scope: .singleAsset(asset))
+            }
+            .disabled(viewModel.isProcessing)
+
+            Button("Process (Capture Set)") {
+                guard let captureSet = viewModel.selectedCaptureSet else { return }
+                viewModel.process(scope: .captureSet(captureSet))
+            }
+            .disabled(viewModel.selectedCaptureSet == nil || viewModel.isProcessing)
+
+            Button("Process (Current Selection)") {
+                let assets = viewModel.manualSelectionAssets
+                guard !assets.isEmpty else { return }
+                viewModel.process(scope: .manualSelection(assets))
+            }
+            .disabled(!viewModel.hasMultiSelection || viewModel.isProcessing)
+
+            Button("Process (Session)") {
+                viewModel.process(scope: .session(viewModel.captureSets))
+            }
+            .disabled(viewModel.captureSets.isEmpty || viewModel.isProcessing)
+
+            if viewModel.isProcessing {
+                ProgressView(
+                    value: Double(viewModel.processedFileCount),
+                    total: Double(max(viewModel.processTotalCount, 1)))
+            }
+            if let processStatusMessage = viewModel.processStatusMessage {
+                Text(processStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
