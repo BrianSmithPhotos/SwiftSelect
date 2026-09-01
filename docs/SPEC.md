@@ -504,8 +504,15 @@ pass — not left behind for a separate trip through Finder.
 - Each clip is its own capture set, always. None of the six grouping checks (§1) can speak for a
   video — no shot counter, no interval index, no render signature — and the one-second gap is
   meaningless against a still shot while the camera was rolling.
-- The preview pane plays the clip, with transport controls. Deciding whether a clip is worth keeping
-  means watching it. Nothing autoplays.
+- The preview pane plays the clip, with the app's own transport: play/pause, a scrub slider, and a
+  strip of ten stills from across the clip that jump the playhead when clicked. Deciding whether a
+  clip is worth keeping mostly means finding whether any of it is usable, which the strip answers at
+  a glance and the slider answers by dragging — without sitting through the whole clip. The slider
+  seeks live as it moves rather than on release. Nothing autoplays: stepping through a card with the
+  arrow keys would otherwise start audio on every clip it passed.
+- Playing and scrubbing run straight off the card, with no copy to local disk first. Measured on the
+  reference card: 64 MB/s sustained read against a 4K clip's own 9.5 MB/s, and 0.386s to build the
+  ten-frame strip for a 91-second clip.
 - Skip works exactly as it does for a photo: same per-folder store, same Active/Skipped filter.
 - No metadata. The metadata panel shows filename, duration and recorded time, and says where Process
   will put the clip. There is nothing to edit, nothing to save, and no sidecar is ever written

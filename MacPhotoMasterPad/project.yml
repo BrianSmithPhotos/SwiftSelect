@@ -17,12 +17,6 @@ targets:
     dependencies:
       - package: MacPhotoMasterCore
         product: MacPhotoMasterCore
-      # Linked explicitly: `import AVKit` only pulls in the SwiftUI cross-import overlay
-      # (`_AVKit_SwiftUI`), whose `VideoPlayerView` subclasses an AVKit class. Without AVKit itself in
-      # the process the runtime can't resolve that superclass and aborts as SwiftUI builds the view's
-      # metadata — at launch, not when a video is first shown. Same reason as `Package.swift`'s
-      # `linkedFramework("AVKit")` on the Mac target, where the crash was actually observed.
-      - sdk: AVKit.framework
     # Local MLX (mlx:) inference peaks past the default ~5GB iOS per-process jetsam limit even for the
     # small FastVLM-0.5B model; this entitlement raises the ceiling so an M4 iPad (16GB) can use more
     # of its RAM. See docs/MLX_PROVIDER.md. Needs -allowProvisioningUpdates so automatic signing adds

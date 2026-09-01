@@ -271,7 +271,7 @@ Videos are the one file type that leaves this path entirely: a clip goes to `~/v
 
 A video rides inside the ordinary `PhotoAsset` rather than in a parallel model type, so skip state,
 capture sets, multi-select, processed state and the grid all keep working with no branching:
-`PhotoAsset.isVideo` and `videoDuration` are the whole of the addition. Four Core pieces carry the
+`PhotoAsset.isVideo` and `videoDuration` are the whole of the addition. Five Core pieces carry the
 rest (SPEC.md §9):
 
 - **`VideoAssetReader`** reads creation date and duration through `AVFoundation` and renders poster
@@ -286,17 +286,36 @@ rest (SPEC.md §9):
 - **`IPadVideoBundle`** is the format of the staged-video subtree the iPad writes and the Mac reads
   back, both ends expressed through `VideoMoveService.destinationDirectory` so the folder names
   cannot drift apart.
+- **`VideoSkimStrip`** samples stills from across a clip for the row under the preview, at slice
+  midpoints so no tile is spent on the first frame (mid-wobble, exposure settling) or the last. Both
+  generator tolerances are infinite, which is what makes it affordable off the card the clip was shot
+  on: measured at 0.386s for ten frames of a 91-second 4K clip on an SD reader.
 
-**AVKit has to be linked explicitly** — `Package.swift`'s `linkedFramework("AVKit")` and
-`MacPhotoMasterPad/project.yml`'s `sdk: AVKit.framework`. `import AVKit` alone does not do it: what
-the compiler pulls in is the SwiftUI cross-import overlay `_AVKit_SwiftUI`, and that overlay's
-`VideoPlayerView` subclasses AVKit's own `AVPlayerView`. With AVKit absent the runtime aborts
-resolving that superclass while SwiftUI instantiates the view's metadata — and that happens as the
-view tree is built at launch, so the app dies on load with no video anywhere near it ("failed to
-demangle superclass of VideoPlayerView from mangled name 'So12AVPlayerViewC'"). Check with
-`otool -L` on the built binary: `_AVKit_SwiftUI` present but `AVKit.framework` missing is the
-signature. No test can guard this — a test process picks AVKit up by other routes, so the suite
-passes either way; only running the built app finds it.
+**The preview draws its own transport — play/pause, scrub slider, skim strip — over a bare
+`AVPlayerLayer`, and deliberately does not use AVKit's `VideoPlayer`.** In the shipped app AVKit's
+floating play button did nothing when clicked, while the same clip played on command: a harness
+running the identical view code and layout (down to the `NavigationSplitView` detail column and the
+inspector) reached `status: readyToPlay`, `rate: 1.0` and a moving playhead on both a 6-second clip
+and an 866MB one, straight off the card. Everything below AVKit's control layer was therefore sound,
+and that layer is the part the app now owns. The failure could not be reproduced headlessly — a
+click is the one input this repo will not script — so it is recorded here rather than pinned by a
+test.
+
+That also removed the AVKit link requirement, and with it a trap worth keeping written down: if
+anyone reintroduces `VideoPlayer`, **AVKit has to be linked explicitly** (`Package.swift`
+`linkerSettings`, `project.yml` `sdk: AVKit.framework`). `import AVKit` alone does not do it — what
+the compiler pulls in is the SwiftUI cross-import overlay `_AVKit_SwiftUI`, whose `VideoPlayerView`
+subclasses AVKit's own `AVPlayerView`. With AVKit absent the runtime aborts resolving that superclass
+while SwiftUI instantiates the view's metadata, and that happens as the view tree is built at launch,
+so the app dies on load with no video anywhere near it ("failed to demangle superclass of
+VideoPlayerView from mangled name 'So12AVPlayerViewC'"). `otool -L` on the built binary shows the
+signature: `_AVKit_SwiftUI` present, `AVKit.framework` missing. No test can guard it — a test process
+picks AVKit up by other routes, so the suite passes either way; only running the built app finds it.
+
+Scrubbing and playing straight off the card are practical, and were measured rather than assumed: the
+reader sustains 64 MB/s against the clip's own 9.5 MB/s (76 Mbit/s), 6.7x headroom, so no copy to
+local disk is needed first. Seeks use a quarter-second tolerance so a drag lands on a keyframe and
+returns at once instead of decoding forward from the previous one.
 
 Videos are excluded at the seams rather than at every call site: `AISuggestionSourcePicker` filters
 them before its RAW-first pick (a `.MOV` is a non-JPEG, so the rule would otherwise prefer one), and
