@@ -223,10 +223,14 @@ private struct CaptureTileView: View {
                     // Top-left, clear of the member-count and processed badges along the bottom.
                     // A poster frame is a still like any other, so without this a clip is
                     // indistinguishable from a photo until it is selected.
+                    //
+                    // A camcorder rather than a play triangle: nothing in the grid plays, so a
+                    // triangle here offers a control that isn't there. The badge says what the file
+                    // is; the transport that actually plays it lives under the preview.
                     if asset.isVideo {
                         Label(
                             VideoAssetReader.durationText(asset.videoDuration),
-                            systemImage: "play.fill"
+                            systemImage: "video.fill"
                         )
                         .font(.system(size: 8, weight: .bold))
                         .labelStyle(.titleAndIcon)

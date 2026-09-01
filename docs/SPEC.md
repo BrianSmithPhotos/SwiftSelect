@@ -500,7 +500,8 @@ pass — not left behind for a separate trip through Finder.
   `AVFoundation` supplies the two things the grid needs: the clip's creation date and its duration
   (there is no `CGImageSource` for a movie, so the still reader cannot see one at all). A clip with
   no readable creation date falls back to the file's modification date.
-- The tile is a poster frame with a play badge and the running time on it.
+- The tile is a poster frame with a video badge (a camcorder, not a play triangle — nothing in the
+  grid plays, so a triangle would offer a control that isn't there) and the running time on it.
 - Each clip is its own capture set, always. None of the six grouping checks (§1) can speak for a
   video — no shot counter, no interval index, no render signature — and the one-second gap is
   meaningless against a still shot while the camera was rolling.

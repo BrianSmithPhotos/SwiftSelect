@@ -287,9 +287,12 @@ private struct CaptureTileView: View {
                             .foregroundStyle(.white, isMultiSelected ? Color.accentColor : .black.opacity(0.35))
                     }
                     if asset.isVideo {
+                        // A camcorder rather than a play triangle: nothing in the grid plays, so a
+                        // triangle here offers a control that isn't there. The badge says what the
+                        // file is; the transport that plays it lives under the preview.
                         Label(
                             VideoAssetReader.durationText(asset.videoDuration),
-                            systemImage: "play.fill"
+                            systemImage: "video.fill"
                         )
                         .font(.system(size: 9, weight: .bold))
                         .labelStyle(.titleAndIcon)
