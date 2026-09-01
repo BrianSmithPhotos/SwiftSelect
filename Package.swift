@@ -48,7 +48,15 @@ let package = Package(
             path: "Sources/MacPhotoMaster",
             resources: [
                 .copy("Resources/AppIcon.png")
-            ]
+            ],
+            // AVKit is linked explicitly because `import AVKit` alone doesn't get it onto the link
+            // line here: what the compiler pulls in is the SwiftUI cross-import overlay
+            // (`_AVKit_SwiftUI`), and that overlay's `VideoPlayerView` subclasses AVKit's own
+            // `AVPlayerView`. Without AVKit in the process the runtime can't resolve that superclass
+            // and aborts while SwiftUI instantiates the view's metadata — which happens at launch,
+            // not when a video is first shown ("failed to demangle superclass of VideoPlayerView
+            // from mangled name 'So12AVPlayerViewC'").
+            linkerSettings: [.linkedFramework("AVKit")]
         ),
         .testTarget(
             name: "MacPhotoMasterTests",

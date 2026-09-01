@@ -287,6 +287,17 @@ rest (SPEC.md §9):
   back, both ends expressed through `VideoMoveService.destinationDirectory` so the folder names
   cannot drift apart.
 
+**AVKit has to be linked explicitly** — `Package.swift`'s `linkedFramework("AVKit")` and
+`MacPhotoMasterPad/project.yml`'s `sdk: AVKit.framework`. `import AVKit` alone does not do it: what
+the compiler pulls in is the SwiftUI cross-import overlay `_AVKit_SwiftUI`, and that overlay's
+`VideoPlayerView` subclasses AVKit's own `AVPlayerView`. With AVKit absent the runtime aborts
+resolving that superclass while SwiftUI instantiates the view's metadata — and that happens as the
+view tree is built at launch, so the app dies on load with no video anywhere near it ("failed to
+demangle superclass of VideoPlayerView from mangled name 'So12AVPlayerViewC'"). Check with
+`otool -L` on the built binary: `_AVKit_SwiftUI` present but `AVKit.framework` missing is the
+signature. No test can guard this — a test process picks AVKit up by other routes, so the suite
+passes either way; only running the built app finds it.
+
 Videos are excluded at the seams rather than at every call site: `AISuggestionSourcePicker` filters
 them before its RAW-first pick (a `.MOV` is a non-JPEG, so the rule would otherwise prefer one), and
 `BatchAISuggestionTargets.isVideoOnly` keeps video-only sets out of a batch run's count.
