@@ -30,7 +30,14 @@ struct MetadataPanelView: View {
                 .padding([.top, .horizontal])
 
             if let asset, asset.isVideo {
-                videoSummary(asset)
+                // A clip has no fields of its own to edit, but a batch run is scoped to the grid's
+                // selection, not to whatever the panel happens to be previewing. Leaving it out
+                // meant one clip sorting first in a selection took the whole AI section away.
+                Form {
+                    videoFields(asset)
+                    Section { batchSuggestionControls }
+                }
+                .formStyle(.grouped)
             } else if let asset {
                 Form {
                     LabeledContent("Title", value: viewModel.titlePreview)
@@ -79,33 +86,7 @@ struct MetadataPanelView: View {
                             }
                         }
                     }
-                    HStack {
-                        Button {
-                            viewModel.startBatchAISuggestion()
-                        } label: {
-                            // Says both halves of what will happen: how many sets, and whether the
-                            // run is scoped to the grid selection or to the whole folder.
-                            Text(
-                                (viewModel.hasMultiSelection ? "Suggest Selected Sets" : "Suggest All Sets")
-                                    + " (\(viewModel.batchAITargetCount))")
-                        }
-                        .disabled(
-                            viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI
-                                || viewModel.isBatchSuggestingAI)
-                        if viewModel.isBatchSuggestingAI {
-                            Button("Stop") {
-                                viewModel.cancelBatchAISuggestion()
-                            }
-                        }
-                    }
-                    Toggle(
-                        "Re-describe sets that already have a description",
-                        isOn: $viewModel.batchAIRedescribesDescribedSets)
-                    if viewModel.isBatchSuggestingAI {
-                        ProgressView(
-                            value: Double(viewModel.batchAICompletedCount),
-                            total: Double(max(viewModel.batchAITotalCount, 1)))
-                    }
+                    batchSuggestionControls
                     if let aiStatusMessage = viewModel.aiStatusMessage {
                         Text(aiStatusMessage)
                             .font(.caption)
@@ -201,8 +182,8 @@ struct MetadataPanelView: View {
     /// showing those controls greyed out would only invite the question of how to enable them.
     /// What is left is the little a clip does carry, plus a plain statement of where Process & Move
     /// will put it, since that destination is not the library folder the buttons below imply.
-    private func videoSummary(_ asset: PhotoAsset) -> some View {
-        Form {
+    @ViewBuilder private func videoFields(_ asset: PhotoAsset) -> some View {
+        Group {
             LabeledContent("File", value: asset.url.lastPathComponent)
             LabeledContent("Duration", value: VideoAssetReader.durationText(asset.videoDuration))
             if let capturedAt = asset.capturedAt {
@@ -218,7 +199,39 @@ struct MetadataPanelView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-        .formStyle(.grouped)
+    }
+
+    /// The batch row, shared by the still and clip branches of `body`. Its scope is the grid's
+    /// selection (or the whole folder), so it belongs to the panel rather than to the previewed
+    /// asset - `BatchAISuggestionTargets` drops video-only sets from the count either way.
+    @ViewBuilder private var batchSuggestionControls: some View {
+        HStack {
+            Button {
+                viewModel.startBatchAISuggestion()
+            } label: {
+                // Says both halves of what will happen: how many sets, and whether the
+                // run is scoped to the grid selection or to the whole folder.
+                Text(
+                    (viewModel.hasMultiSelection ? "Suggest Selected Sets" : "Suggest All Sets")
+                        + " (\(viewModel.batchAITargetCount))")
+            }
+            .disabled(
+                viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI
+                    || viewModel.isBatchSuggestingAI)
+            if viewModel.isBatchSuggestingAI {
+                Button("Stop") {
+                    viewModel.cancelBatchAISuggestion()
+                }
+            }
+        }
+        Toggle(
+            "Re-describe sets that already have a description",
+            isOn: $viewModel.batchAIRedescribesDescribedSets)
+        if viewModel.isBatchSuggestingAI {
+            ProgressView(
+                value: Double(viewModel.batchAICompletedCount),
+                total: Double(max(viewModel.batchAITotalCount, 1)))
+        }
     }
 
     private var saveSection: some View {

@@ -120,29 +120,7 @@ struct MetadataPanelView: View {
                                 .disabled(viewModel.previewAsset == nil)
                             }
 
-                            // Batch: one suggestion per capture set. The label says both halves of
-                            // what will happen — how many sets, and whether the run is scoped to the
-                            // grid selection or to everything the grid is showing — because the sheet
-                            // covers the grid, so the selection itself is not visible from here.
-                            if viewModel.isBatchSuggestingAI {
-                                Button("Stop", role: .cancel) {
-                                    viewModel.cancelBatchAISuggestion()
-                                }
-                                ProgressView(
-                                    value: Double(viewModel.batchAICompletedCount),
-                                    total: Double(max(viewModel.batchAITotalCount, 1)))
-                            } else {
-                                Button(
-                                    (viewModel.hasMultiSelection ? "Suggest Selected Sets" : "Suggest All Sets")
-                                        + " (\(viewModel.batchAITargetCount))"
-                                ) {
-                                    viewModel.startBatchAISuggestion()
-                                }
-                                .disabled(viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI)
-                            }
-                            Toggle(
-                                "Re-describe sets that already have a description",
-                                isOn: $viewModel.batchAIRedescribesDescribedSets)
+                            batchSuggestionControls
 
                             if let aiStatusMessage = viewModel.aiStatusMessage {
                                 Text(aiStatusMessage)
@@ -252,8 +230,42 @@ struct MetadataPanelView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+            // A clip has no fields of its own to edit, but a batch run is scoped to the grid's
+            // selection, not to whatever the sheet happens to be previewing. Leaving it out meant
+            // one clip sorting first in a selection took the whole AI section away.
+            Section("AI Suggestions") { batchSuggestionControls }
             processMoveSection(asset)
         }
+    }
+
+    /// The batch row, shared by the still form and the video summary so a clip in the preview can
+    /// never hide a run that was never about it - `BatchAISuggestionTargets` drops video-only sets
+    /// from the count either way.
+    @ViewBuilder
+    private var batchSuggestionControls: some View {
+        // Batch: one suggestion per capture set. The label says both halves of
+        // what will happen — how many sets, and whether the run is scoped to the
+        // grid selection or to everything the grid is showing — because the sheet
+        // covers the grid, so the selection itself is not visible from here.
+        if viewModel.isBatchSuggestingAI {
+            Button("Stop", role: .cancel) {
+                viewModel.cancelBatchAISuggestion()
+            }
+            ProgressView(
+                value: Double(viewModel.batchAICompletedCount),
+                total: Double(max(viewModel.batchAITotalCount, 1)))
+        } else {
+            Button(
+                (viewModel.hasMultiSelection ? "Suggest Selected Sets" : "Suggest All Sets")
+                    + " (\(viewModel.batchAITargetCount))"
+            ) {
+                viewModel.startBatchAISuggestion()
+            }
+            .disabled(viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI)
+        }
+        Toggle(
+            "Re-describe sets that already have a description",
+            isOn: $viewModel.batchAIRedescribesDescribedSets)
     }
 
     /// The Process & Move controls, shared by the still form and the video summary so the two can

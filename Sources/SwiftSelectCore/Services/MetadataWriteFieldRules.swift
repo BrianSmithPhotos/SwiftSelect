@@ -1,9 +1,24 @@
 import Foundation
 
-/// Field rules shared by every `MetadataWriter` conformance — the same idempotent-keyword and
-/// GPS-range rules apply whether the write lands directly in the file (`ExifToolClient`) or in a
+/// Field and target rules shared by every `MetadataWriter` conformance — the same idempotent-keyword
+/// and GPS-range rules apply whether the write lands directly in the file (`ExifToolClient`) or in a
 /// sidecar (`NativeMetadataWriter`), so both call these rather than each keeping their own copy.
 public enum MetadataWriteFieldRules {
+    /// The members of `assets` a metadata write may actually touch: the stills. A clip carries no
+    /// description or keywords this app reads back, and both write paths do damage if handed one —
+    /// exiftool treats a `.MOV` as writable and puts the XMP half in while silently dropping the
+    /// IPTC half, and the iPad would leave an `.xmp` beside a clip that `IPadImportService`'s video
+    /// route never looks for and so never clears.
+    ///
+    /// A clip reaches a write at all because the grid lets one be selected on purpose: Merge, Skip
+    /// and Process & Move all want clips in a selection (`ProcessMoveScope` routes them to
+    /// `VideoMoveService`). Only metadata doesn't, so the line is drawn here rather than at the
+    /// selection — one rule at the last common point, covering the batch run's per-set write as
+    /// well as the two selection-scoped ones.
+    public static func writableTargets(_ assets: [PhotoAsset]) -> [PhotoAsset] {
+        assets.filter { !$0.isVideo }
+    }
+
     public static func validate(gps: GPSCoordinate?) throws {
         guard let gps else { return }
         guard (-90...90).contains(gps.latitude) else { throw MetadataWriteError.invalidLatitude(gps.latitude) }

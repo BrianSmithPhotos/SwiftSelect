@@ -1461,10 +1461,14 @@ final class SourceBrowserViewModel: ObservableObject {
         let sourceRepresentativeID: PhotoAsset.ID?
         if hasMultiSelection {
             targetAssets = manualSelectionAssets
+            // The first selected set that actually holds a still, not simply the first: a clip
+            // sorting ahead of the photos is a video-only set, and stopping there would leave the
+            // Suggest button doing nothing at all for a selection full of describable images.
             guard
                 let firstSelectedSet = captureSets.first(where: {
                     guard let representativeID = $0.representative?.id else { return false }
-                    return multiSelectedIDs.contains(representativeID)
+                    guard multiSelectedIDs.contains(representativeID) else { return false }
+                    return AISuggestionSourcePicker.pickSourceAsset(from: $0.members) != nil
                 })
             else { return }
             sourceSetMembers = firstSelectedSet.members
@@ -2240,9 +2244,18 @@ final class SourceBrowserViewModel: ObservableObject {
     /// while the panel's buffer still belongs to whichever set the user has selected.
     @discardableResult
     private func writeMetadata(
-        description: String, keywords: [String], gps: GPSCoordinate?, to targets: [PhotoAsset]
+        description: String, keywords: [String], gps: GPSCoordinate?, to requested: [PhotoAsset]
     ) async -> String? {
-        guard !isSavingMetadata, !targets.isEmpty else { return nil }
+        // Clips are dropped here, not at the caller: a mixed multi-selection, a merged set holding
+        // a clip beside its stills, and the batch run all arrive through this one function.
+        let targets = MetadataWriteFieldRules.writableTargets(requested)
+        guard !isSavingMetadata else { return nil }
+        // Selecting only clips and hitting Save is reachable, and doing nothing without saying so
+        // reads as a failed save rather than a scope that had no stills in it.
+        guard !targets.isEmpty else {
+            saveStatusMessage = requested.isEmpty ? nil : "Nothing to save - a clip carries no description."
+            return nil
+        }
 
         isSavingMetadata = true
         saveStatusMessage = "Saving…"
