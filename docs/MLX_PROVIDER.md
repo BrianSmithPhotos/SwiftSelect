@@ -123,7 +123,7 @@ inference. Worth revisiting only if a future mlx-swift-lm bump adds `"qwen3_vl_m
 
 ## On-device (iPad)
 
-Local MLX inference runs on the physical iPad (M4, 11", 16GB) via the `MacPhotoMasterPad` target,
+Local MLX inference runs on the physical iPad (M4, 11", 16GB) via the `SwiftSelectPad` target,
 using the one 16GB-viable preset (`FastVLM-0.5B-bf16`). Four things had to be settled to get from
 "links" to "generates," all verified on-device (2026-07-20):
 
@@ -135,7 +135,7 @@ using the one 16GB-viable preset (`FastVLM-0.5B-bf16`). Four things had to be se
   `setBytes` with a nil pointer for zero-element arrays — harmless at runtime, but Metal API
   Validation (Xcode's default for a Debug run) turns it into a hard `bytes argument cannot be nil`
   assertion. Disabled via the scheme (`enableGPUValidationMode: disabled` in
-  `MacPhotoMasterPad/project.yml`). Release builds never run that validation layer.
+  `SwiftSelectPad/project.yml`). Release builds never run that validation layer.
 - **`increased-memory-limit` entitlement.** iOS enforces a per-process jetsam memory cap; without the
   entitlement it was ~5GB here, with it ~6GB. Set in `project.yml` (`com.apple.developer.kernel.
   increased-memory-limit`), added to the dev profile via automatic signing (`-allowProvisioningUpdates`).
@@ -146,7 +146,7 @@ using the one 16GB-viable preset (`FastVLM-0.5B-bf16`). Four things had to be se
   throughput). With the cache capped the measured working set is ~2.7GB. A too-small cap (32MB) fit
   but made generation very slow (constant buffer round-trips to the OS); 1GB cache + a 5GB relaxed
   memory limit gives fast generation (seconds, not minutes) with headroom under the jetsam cap. This
-  is why `MLX` is a direct `Package.swift` dependency of `MacPhotoMasterCore` (for `import MLX`).
+  is why `MLX` is a direct `Package.swift` dependency of `SwiftSelectCore` (for `import MLX`).
 
 **Prompt profiles (step 8b).** `AISuggestionService` now builds one of two prompt variants
 (`PromptProfile.full`/`.compact`). `.full` is the original, unchanged, used by every Mac/OpenRouter

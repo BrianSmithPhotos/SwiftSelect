@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "MacPhotoMaster",
+    name: "SwiftSelect",
     platforms: [
         .macOS(.v14),
         .iOS(.v17)
     ],
     products: [
-        // Consumed as a local package dependency by MacPhotoMasterPad/ (a separate, real Xcode
+        // Consumed as a local package dependency by SwiftSelectPad/ (a separate, real Xcode
         // App project — see docs/ARCHITECTURE.md "Multi-platform target split"). A bare SwiftPM
         // executableTarget can't produce a real, device-signable .app bundle for iOS, so the iPadOS
         // app itself lives outside this manifest; only the portable Core library is declared here.
-        .library(name: "MacPhotoMasterCore", targets: ["MacPhotoMasterCore"])
+        .library(name: "SwiftSelectCore", targets: ["SwiftSelectCore"])
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift", .upToNextMajor(from: "7.0.0")),
@@ -25,11 +25,11 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
     ],
     targets: [
-        // Portable Services/Models shared by the macOS app and the MacPhotoMasterPad iPadOS Xcode
+        // Portable Services/Models shared by the macOS app and the SwiftSelectPad iPadOS Xcode
         // project — everything except ExifToolClient.swift, which shells out via `Process` and is
         // macOS-only. See docs/ARCHITECTURE.md for the target-split rationale.
         .target(
-            name: "MacPhotoMasterCore",
+            name: "SwiftSelectCore",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "MLX", package: "mlx-swift"),
@@ -40,20 +40,20 @@ let package = Package(
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
-            path: "Sources/MacPhotoMasterCore"
+            path: "Sources/SwiftSelectCore"
         ),
         .executableTarget(
-            name: "MacPhotoMaster",
-            dependencies: ["MacPhotoMasterCore"],
-            path: "Sources/MacPhotoMaster",
+            name: "SwiftSelect",
+            dependencies: ["SwiftSelectCore"],
+            path: "Sources/SwiftSelect",
             resources: [
                 .copy("Resources/AppIcon.png")
             ]
         ),
         .testTarget(
-            name: "MacPhotoMasterTests",
-            dependencies: ["MacPhotoMaster", "MacPhotoMasterCore"],
-            path: "Tests/MacPhotoMasterTests",
+            name: "SwiftSelectTests",
+            dependencies: ["SwiftSelect", "SwiftSelectCore"],
+            path: "Tests/SwiftSelectTests",
             resources: [
                 .copy("Fixtures")
             ]

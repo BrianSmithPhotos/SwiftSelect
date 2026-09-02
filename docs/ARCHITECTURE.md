@@ -5,32 +5,32 @@ Swift/SwiftUI equivalent of the reference app's `ui/` + `services/` + `workers/`
 
 ## Layers
 
-- **`Sources/MacPhotoMaster/Views/`** — SwiftUI views, macOS-only. Layout and bindings only, no
+- **`Sources/SwiftSelect/Views/`** — SwiftUI views, macOS-only. Layout and bindings only, no
   business logic. Equivalent to the reference app's `ui/widgets/`.
-- **`Sources/MacPhotoMaster/ViewModels/`** — `@MainActor` `ObservableObject` (or `@Observable`)
+- **`Sources/SwiftSelect/ViewModels/`** — `@MainActor` `ObservableObject` (or `@Observable`)
   types that hold UI state and call into services, usually via `Task { }`. Equivalent to the
   reference app's `ui/main_window.py` orchestration plus its `workers/` — Swift's structured
   concurrency (`async`/`await`, `Task`) replaces the need for a separate `QRunnable`-style worker
   layer. A view model kicks off an `async` service call in a `Task`, the service does its I/O off
   the main actor, and the result flows back to `@Published` state.
-- **`Sources/MacPhotoMasterCore/Services/`** — the actual logic: capture grouping, renaming, AI
+- **`Sources/SwiftSelectCore/Services/`** — the actual logic: capture grouping, renaming, AI
   provider calls, timeline/elevation/geocode lookups, and the `MetadataWriter` protocol itself.
   Same role as the reference app's `services/`: no Qt/SwiftUI imports, easy to unit test in
   isolation. Prefer plain `struct`s/`actor`s with `async` functions over classes with mutable state
   where possible. Two exceptions stay in the macOS app target rather than Core: `ExifToolClient`
   and `IPadImportService`, which depends on it concretely (both below).
-- **`Sources/MacPhotoMasterCore/Models/`** — plain data types (`PhotoAsset`, `CaptureSet`, etc.),
+- **`Sources/SwiftSelectCore/Models/`** — plain data types (`PhotoAsset`, `CaptureSet`, etc.),
   `Codable` where they cross a process/network boundary (Timeline JSON, AI provider responses).
 
 ## Multi-platform target split
 
-`Package.swift` declares `MacPhotoMasterCore` (a library, portable to any Apple platform, exposed as
-a product) and `MacPhotoMaster` (the macOS executable app, depends on Core). The iPadOS app,
-`MacPhotoMasterPad`, is *not* a target in this manifest — it lives in its own real Xcode project at
-`MacPhotoMasterPad/MacPhotoMasterPad.xcodeproj`, generated from `MacPhotoMasterPad/project.yml` via
+`Package.swift` declares `SwiftSelectCore` (a library, portable to any Apple platform, exposed as
+a product) and `SwiftSelect` (the macOS executable app, depends on Core). The iPadOS app,
+`SwiftSelectPad`, is *not* a target in this manifest — it lives in its own real Xcode project at
+`SwiftSelectPad/SwiftSelectPad.xcodeproj`, generated from `SwiftSelectPad/project.yml` via
 [xcodegen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`; regenerate after editing
 `project.yml` with `xcodegen generate` from that directory), which adds the root package as a local
-Swift package dependency (`path: ..`) and consumes the `MacPhotoMasterCore` product.
+Swift package dependency (`path: ..`) and consumes the `SwiftSelectCore` product.
 
 This split exists because a bare SwiftPM `executableTarget` targeting iOS cannot produce a real,
 device-signable `.app` bundle — it builds and runs in the Simulator (no code signing required there),
@@ -44,8 +44,8 @@ plain SwiftPM `executableTarget` rather than needing the same treatment. Both ap
 depend on Core and hold nothing but platform-specific Views/ViewModels/entry points.
 
 Installing on a physical iPad (Team ID `U4UCUZRYBD`) is confirmed working end to end: open
-`MacPhotoMasterPad/MacPhotoMasterPad.xcodeproj` (not `Package.swift`) in Xcode, select the
-`MacPhotoMasterPad` scheme and the device destination, and Run. `MacPhotoMasterPad/project.yml`
+`SwiftSelectPad/SwiftSelectPad.xcodeproj` (not `Package.swift`) in Xcode, select the
+`SwiftSelectPad` scheme and the device destination, and Run. `SwiftSelectPad/project.yml`
 hardcodes the Team ID in `DEVELOPMENT_TEAM`/`CODE_SIGN_STYLE: Automatic`; not a secret, but visible
 in the repo.
 
@@ -69,7 +69,7 @@ Metadata editing (description/keywords, staged via `SidecarStagingStore` — see
 below), multi-scope Save, a live rename preview (`PhotoBrowserViewModel.titlePreview`, same
 `RenameService`-backed design as the Mac app's, driven by a per-session `sessionBatch` label), and
 Process & Move (`process(scope:)`, four scope buttons mirroring the Mac app's) are all built and
-user-verified on the physical iPad, reusing `MacPhotoMasterCore`'s `MetadataEditParsing`/
+user-verified on the physical iPad, reusing `SwiftSelectCore`'s `MetadataEditParsing`/
 `SelectionScope`/`RenameService`/`ProcessMoveService`/`ProcessedStateStore` essentially unmodified —
 `ProcessMoveService` is constructed with `NativeMetadataWriter()` in place of the Mac app's
 `ExifToolClient()`, otherwise identical. `process(scope:)` patches in any `SidecarStagingStore`-staged
@@ -85,7 +85,7 @@ processed files off the iPad is a manual copy rather than an iPad-side push into
 app (`LSSupportsOpeningDocumentsInPlace`), and the Files listing appears only when *both* are set.
 `LSSupportsOpeningDocumentsInPlace` comes from `project.yml`; `UIFileSharingEnabled` has no
 `INFOPLIST_KEY_` equivalent in Xcode's allowlist — set as a build setting it is silently ignored — so
-it lives in a one-key `MacPhotoMasterPad/Info.plist` that `GENERATE_INFOPLIST_FILE` merges into. The
+it lives in a one-key `SwiftSelectPad/Info.plist` that `GENERATE_INFOPLIST_FILE` merges into. The
 Mac app finishes the job
 from there — see "iPad import (Mac side)" below.
 
@@ -93,7 +93,7 @@ from there — see "iPad import (Mac side)" below.
 user-verified on the physical iPad — a location and altitude are suggested for GPS-less photos from
 the nearest Timeline point, and once a photo has GPS (embedded or suggested) `ReverseGeocodeService`
 merges city/county/state into the keyword edit buffer once per capture set per session. Both reuse
-`MacPhotoMasterCore` unchanged (`TimelineImportParser`/`TimelineLocationCache`/`ElevationLookupService`/
+`SwiftSelectCore` unchanged (`TimelineImportParser`/`TimelineLocationCache`/`ElevationLookupService`/
 `ElevationCache`/`ReverseGeocodeService`); only the Timeline file-access path differs from the Mac (a
 persisted document-picker bookmark instead of `TimelineDriveSync`'s Drive-Desktop glob — see "iPad
 file access" below). Geocoding reads GPS from the asset rather than an editable lat/long field (the
@@ -134,7 +134,7 @@ crop or, on a tap, picks the Vision instance under the finger via
 path for rock-solid structured output — Apple Foundation Models / `@Generable` guided generation as an
 on-device provider — is recorded in memory, not scheduled.
 
-`ExifToolClient` is the one Service that stays in the `MacPhotoMaster` (macOS) target instead of
+`ExifToolClient` is the one Service that stays in the `SwiftSelect` (macOS) target instead of
 moving to Core: it shells out to the `exiftool` binary via `Process`, and process/subprocess
 execution isn't available in the iOS/iPadOS sandbox. It conforms to the portable `MetadataWriter`
 protocol (Core) alongside `NativeMetadataWriter` (Core, ImageIO `.xmp`-sidecar write, safe on any
@@ -151,8 +151,8 @@ package:
   `public`.
 
 Compiling for macOS alone (`swift build`/`swift test`) doesn't catch iOS-only API gaps, since it only
-builds for the host platform. Use `xcodebuild -project MacPhotoMasterPad/MacPhotoMasterPad.xcodeproj
--scheme MacPhotoMasterPad -destination "generic/platform=iOS" build` to force a real iOS-SDK compile.
+builds for the host platform. Use `xcodebuild -project SwiftSelectPad/SwiftSelectPad.xcodeproj
+-scheme SwiftSelectPad -destination "generic/platform=iOS" build` to force a real iOS-SDK compile.
 This is how the one genuine cross-platform gap found so far was caught:
 `FileManager.homeDirectoryForCurrentUser` is
 `API_UNAVAILABLE` on iOS. Both call sites (`MLXModelRegistry`'s oMLX cache-directory lookup,
@@ -200,7 +200,7 @@ actual views:
   trip (cards commonly aren't reformatted until the camera reports them full) — writing anything to
   that card, even a small sidecar, means carrying interrupted-write/firmware-interaction risk for the
   entire trip instead of a single import session. Instead: `SidecarStagingStore` stages sidecars at
-  `~/Library/Application Support/MacPhotoMaster/SidecarStaging/` inside the app's own sandbox,
+  `~/Library/Application Support/SwiftSelect/SidecarStaging/` inside the app's own sandbox,
   keyed by the original filename + file size (not path or capture timestamp — a card that isn't
   reformatted between sessions can have its DCIM folder numbering roll over, so path isn't stable,
   and filename is already what distinguishes shots). `PhotoBrowserViewModel.process(scope:)` reads
@@ -233,7 +233,7 @@ actual views:
 
 `IPadImportService` finishes off files the iPad processed but couldn't complete — the art-filter
 token exiftool alone can read, and the sidecar folded into the image (SPEC.md §5). It lives in the
-`MacPhotoMaster` app target rather than Core for the same reason `ExifToolClient` does: it depends on
+`SwiftSelect` app target rather than Core for the same reason `ExifToolClient` does: it depends on
 it concretely, and there is no iPad side of this feature to share with.
 
 The work per file is deliberately thin, because everything downstream of the enrichment is the
@@ -331,7 +331,7 @@ legitimately start in the same second.
 `RawDevelopService` (Core) renders a RAW to a JPEG via `CIRAWFilter` +
 `CIContext.writeJPEGRepresentation`, choosing a decoder per file (SPEC.md §5 "RAW develop"). The
 platform split follows `MetadataWriter`/`ExifToolClient` exactly: the service takes an optional
-`any DNGConverting`, and the only implementation, `AdobeDNGConverter`, lives in the `MacPhotoMaster`
+`any DNGConverting`, and the only implementation, `AdobeDNGConverter`, lives in the `SwiftSelect`
 app target because it shells out to a Mac-only application. An absent converter is not an error — it
 makes the service fall back to the newest decoder the file itself offers.
 
@@ -690,7 +690,9 @@ propagate there), so the failure path is deliberately loud now rather than a sil
 `APIKeyStore` resolves both `EBIRD_API_KEY` and `OPENROUTER_API_KEY` from the process environment
 first, then falls back to the macOS Keychain (`kSecClassGenericPassword`, service
 `photos.briansmith.macphotomaster.apikeys`, accounts `EBIRD_API_KEY`/`OPENROUTER_API_KEY` — opaque
-`kSecAttrService`/`kSecAttrAccount` lookup keys, nothing derives them from the bundle ID at runtime).
+`kSecAttrService`/`kSecAttrAccount` lookup keys, nothing derives them from the bundle ID at runtime,
+which is why the service still reads `macphotomaster` after the 2026-09 rename — moving it would
+strand the saved keys for no gain).
 The environment-only approach broke for any
 GUI-launched process — Xcode's Run button, Finder, and Dock all inherit `launchd`'s environment,
 never a shell's `.zshrc` exports — so relying solely on it meant the packaged `.app` silently lost

@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-MacPhotoMaster (Swift): a from-scratch Swift/SwiftUI reimplementation of the Python/PySide6
+SwiftSelect (Swift): a from-scratch Swift/SwiftUI reimplementation of the Python/PySide6
 sibling app [`phototags`](https://github.com/BrianSmithPhotos/phototags) — taken on as a way to
 learn Swift and SwiftUI, not a line-by-line port. Read `docs/SPEC.md` (what the app should do) and
 `docs/ARCHITECTURE.md` (where code should live) before starting work — both are self-contained; you

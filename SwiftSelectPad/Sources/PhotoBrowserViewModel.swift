@@ -1,0 +1,2172 @@
+import Foundation
+import UIKit
+import os
+import SwiftSelectCore
+
+/// iPad-scoped counterpart to the macOS app's `SourceBrowserViewModel` — still a smaller slice while
+/// the iPad UI is built out (no subject-isolation crop, no Ollama provider), but AI suggestions and
+/// GPS/geocoding have since landed. Wires up browsing, capture-set grouping, skip/un-skip,
+/// single-selection preview,
+/// grid multi-select, description/keywords metadata editing + save (staged via
+/// `SidecarStagingStore`, not written straight to the original file — see docs/ARCHITECTURE.md's
+/// iPad section), a live rename preview (`titlePreview`), and Process & Move (`process(scope:)`),
+/// all via the platform-portable `SwiftSelectCore` services the macOS view model already uses for
+/// the same jobs — `ProcessMoveService` is constructed with `NativeMetadataWriter()` here instead of
+/// the Mac app's `ExifToolClient()`, but is otherwise reused unmodified. Renaming itself, like the
+/// Mac app, only ever applies to the destination copy made at Process & Move time — this view model
+/// only computes the *preview*, never renames the source file.
+///
+/// Multi-select mirrors the Mac app's `multiSelectedIDs`/shift-click behavior two ways: touch has
+/// no modifier-key equivalent, so "Select mode" plus tap-to-toggle stands in for cmd-click there;
+/// but when a hardware keyboard/trackpad is attached, real cmd-click/shift-click also works
+/// (`handleModifierClick`, via `TileTapCatcher`), reusing
+/// the exact same portable `SelectionScope.rangeBetween` the Mac app's `selectTile(_:modifiers:)`
+/// uses. Both paths write to the same `multiSelectedIDs`, which now doubles as the scope for
+/// `saveMetadata(scope: .manualSelection(...))` the same way it already did for
+/// `performBatchSkipAction`. This stops short of porting the Mac's filmstrip ring-selection, though:
+/// that only exists to further narrow a Save/Process scope beyond the grid's own multi-selection —
+/// see `PreviewPanelView`'s doc comment.
+@MainActor
+final class PhotoBrowserViewModel: ObservableObject {
+    @Published private(set) var breadcrumb: [URL] = []
+    @Published private(set) var subfolders: [URL] = []
+    @Published var sourceViewFilter: SourceViewFilter = .active {
+        didSet { selectFirstTile() }
+    }
+    @Published private(set) var captureSets: [CaptureSet] = []
+    @Published private(set) var skippedCaptureSets: [CaptureSet] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var loadErrorMessage: String?
+
+    /// The grid's current selection. The filmstrip's own `previewAssetID` (below) can point at a
+    /// different member of this set's capture group without changing which tile is selected.
+    ///
+    /// `didSet` resyncs the metadata edit buffer to whatever's now shown large, discarding any
+    /// unsaved in-progress edit — mirrors the Mac app's `SourceBrowserViewModel.selectedAssetID`.
+    @Published private(set) var selectedAssetID: PhotoAsset.ID? {
+        didSet {
+            guard selectedAssetID != oldValue else { return }
+            loadEditBuffer()
+        }
+    }
+    /// Which member of `selectedCaptureSet` the big preview shows — `nil` means "the
+    /// representative." Separate from `selectedAssetID` so tapping a filmstrip thumbnail doesn't
+    /// re-select a different grid tile.
+    @Published private(set) var previewAssetID: PhotoAsset.ID? {
+        didSet {
+            guard previewAssetID != oldValue else { return }
+            loadEditBuffer()
+        }
+    }
+
+    /// The metadata panel's editable fields, kept as free text (parsed via `MetadataEditParsing` at
+    /// save time) the same way the Mac app's `SourceBrowserViewModel` does — see its doc comment.
+    /// Synced to `previewAsset`'s current values (or a previously staged draft, if one exists) by
+    /// `loadEditBuffer` whenever the selection/preview changes. No `editableTitle`: per
+    /// docs/SPEC.md §3/§4, Title only becomes real metadata at Process & Move time (not built on
+    /// iPad yet) — until then it's just `titlePreview` below, a live rename preview.
+    @Published var editableDescription: String = ""
+    @Published var editableKeywords: String = ""
+
+    /// The keywords `loadEditBuffer` (or a staged draft) put in `editableKeywords` for the current
+    /// photo, so `suggestAI` can tell what the user has added by hand since (see
+    /// `MetadataEditParsing.userAddedKeywords`) — mirrors the Mac app's `loadedKeywords`.
+    private var loadedKeywords: [String] = []
+    @Published private(set) var isSavingMetadata = false
+    @Published var saveStatusMessage: String?
+
+    /// The manual per-session label `RenameService` needs for its filename pattern (docs/SPEC.md
+    /// §4) — mirrors the Mac app's `sessionBatch`. `didSet` recomputes `renamePreviewFilename`
+    /// immediately so the Title field updates live as the user types a batch label.
+    @Published var sessionBatch: String = "" {
+        didSet {
+            guard sessionBatch != oldValue else { return }
+            updateRenamePreview()
+        }
+    }
+    /// Live preview of the filename `RenameService` would generate for `previewAsset` right now —
+    /// recomputed by `updateRenamePreview()` whenever the preview or `sessionBatch` changes.
+    /// Uniqueness is only checked against the *source* folder's existing names, same caveat as the
+    /// Mac app's `renamePreviewFilename` doc comment: the authoritative check happens at Process &
+    /// Move time (not built on iPad yet), so this can differ from the eventual final name in rare
+    /// collision cases.
+    @Published private(set) var renamePreviewFilename: String = ""
+    /// What the Title field displays — the rename preview's filename stem, never independently typed
+    /// or saved. See `editableDescription`'s doc comment for why there's no `editableTitle`.
+    var titlePreview: String { (renamePreviewFilename as NSString).deletingPathExtension }
+
+    /// Where Process & Move copies destination files under — a fixed local folder inside the app's
+    /// own container, not something the user picks. Deliberately not the Mac app's model (a
+    /// user-chosen, `UserDefaults`-persisted folder that can point anywhere, including external
+    /// volumes): a Google-Drive-mounted folder was considered and ruled out, since Drive's own
+    /// background sync writing/evicting bytes in the same folder `ProcessMoveService` copies into and
+    /// SHA-256-verifies would race with that verification. Files land here and stay local until the
+    /// user moves them off the device, after which the Mac app's iPad import finishes the job (the
+    /// exiftool-only work: art-filter token into the filename and keywords, sidecar folded into the
+    /// image, final library routing — see docs/SPEC.md §5). Both routes off the device can only see
+    /// the app's own `Documents` directory — Finder file sharing over USB and the on-device Files
+    /// app, which need `UIFileSharingEnabled` (Info.plist) and `LSSupportsOpeningDocumentsInPlace`
+    /// (project.yml) respectively, and the Files listing needs both —
+    /// hence staging inside `Documents` rather than anywhere else in the sandbox. No security-scoped
+    /// access needed since this is entirely inside the app's own sandbox.
+    let libraryRootURL: URL = PhotoBrowserViewModel.makeLibraryRootDirectory()
+
+    private static func makeLibraryRootDirectory() -> URL {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let staging = documents.appendingPathComponent("ProcessedLibrary", isDirectory: true)
+        try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        return staging
+    }
+
+    @Published private(set) var isProcessing = false
+    @Published var processStatusMessage: String?
+    /// Files finished (successfully or not) and the scope's total, driving the determinate progress
+    /// bar shown while `isProcessing`. Per-file granularity is as fine as this can get without
+    /// `ProcessMoveService` reporting from inside a single copy — see `process(scope:)`.
+    @Published private(set) var processedFileCount = 0
+    @Published private(set) var processTotalCount = 0
+
+    /// Status text for the Timeline-derived GPS suggestion (docs/SPEC.md §7), shown under the
+    /// read-only lat/long fields — e.g. "Nearest GPS 3m 20s away (GPS, accuracy 12m)". Set by
+    /// `suggestGPSIfNeeded()`, cleared on every selection change by `loadEditBuffer()`. Mirrors the
+    /// Mac app's `gpsSuggestionStatusMessage`.
+    @Published var gpsSuggestionStatusMessage: String?
+    /// True while `refreshAltitude()` has an elevation lookup in flight — disables the manual
+    /// altitude refresh button so it can't be fired twice at once.
+    @Published private(set) var isLookingUpAltitude = false
+
+    /// Result/progress text for the Timeline import, shown in the iPad `SettingsView` — e.g.
+    /// "Imported 214 Timeline point(s)." or "Timeline is already up to date." Unlike the Mac app's
+    /// silent per-folder-load `TimelineDriveSync` (which globs a mounted Drive path), the iPad reads
+    /// `Timeline.json` through a persisted security-scoped bookmark the user grants once via the
+    /// document picker — see `SettingsView` and docs/ARCHITECTURE.md's iPad file-access section.
+    @Published var timelineStatusMessage: String?
+    @Published private(set) var isImportingTimeline = false
+
+    /// The AI model selection in the `"<provider>:<model>"` convention (`AIModelSelection`), e.g.
+    /// `"mlx:mlx-community/gemma-3-4b-it-4bit"` or `"openrouter:google/gemini-2.5-flash"`. Persisted
+    /// so a chosen model survives relaunch. Defaults to the on-device gemma-3-4b preset — the
+    /// recommended local model (good keywords + descriptions, runs in seconds, no API key, ~5GB peak
+    /// under the raised jetsam cap). FastVLM-0.5B remains available as a lighter/lower-quality fallback.
+    /// iPad supports only `mlx:` and `openrouter:`; `ollama:` (no daemon on iPad) errors from `suggestAI`.
+    @Published var aiModelText: String =
+        UserDefaults.standard.string(forKey: PhotoBrowserViewModel.aiModelDefaultsKey)
+        ?? "mlx:mlx-community/gemma-3-4b-it-4bit"
+    {
+        didSet {
+            guard aiModelText != oldValue else { return }
+            UserDefaults.standard.set(aiModelText, forKey: Self.aiModelDefaultsKey)
+        }
+    }
+    @Published private(set) var isSuggestingAI = false
+    @Published var aiStatusMessage: String?
+    /// True while a batch run is working through its capture sets. Separate from `isSuggestingAI`
+    /// because the two are not the same button and must not disable each other by accident: a batch
+    /// run sets this for minutes, and `isSuggestingAI` still belongs to the one request in flight.
+    @Published private(set) var isBatchSuggestingAI = false
+    /// How far a batch run has got, for the progress caption. Total is fixed when the run starts.
+    @Published private(set) var batchAICompletedCount = 0
+    @Published private(set) var batchAITotalCount = 0
+    /// Whether a batch run also re-describes sets that already have a description. Off by default
+    /// and deliberately not persisted: it is a decision about this run, over these files, and a
+    /// setting that quietly stayed on would overwrite hand-written prose on the next folder.
+    @Published var batchAIRedescribesDescribedSets = false
+    /// The exact image the last `suggestAI()` call sent to the model, shown in the Metadata panel so
+    /// a misidentification is diagnosable rather than assumed to be a hallucination.
+    ///
+    /// The preview shows `previewAsset` (the capture set's JPEG-first representative) while the AI
+    /// is sent `AISuggestionSourcePicker`'s pick (the RAW), so the two are routinely different
+    /// files — and an in-camera crop the RAW doesn't share (e.g. the OM-3's 2x digital
+    /// teleconverter) then puts things in the model's view that aren't in the user's. Mirrors the
+    /// Mac app's `SourceBrowserViewModel.aiEvaluatedImage`, minus its subject-isolation crop paths,
+    /// which this app doesn't have.
+    @Published private(set) var aiEvaluatedImage: CGImage?
+    /// Filename of the asset `aiEvaluatedImage` was decoded from, shown alongside it so the
+    /// preview-vs-sent file distinction above is visible rather than inferred.
+    @Published private(set) var aiEvaluatedImageSourceName: String?
+    /// User-chosen crop override in preview-image-pixel space (the 2048px decode
+    /// `extractPreviewAsync` produces), set either by dragging a rectangle on the big preview or by
+    /// tapping a Vision-detected subject (`pickSubjectInstance`). When present it replaces
+    /// `SubjectIsolationService`'s auto-crop for both the eager "Evaluated" preview and the next
+    /// `suggestAI()` call. Cleared on every selection change by `loadEditBuffer()`. Mirrors the Mac
+    /// app's `manualSubjectCropRect`.
+    @Published private(set) var manualSubjectCropRect: CGRect?
+    /// Handle to the in-flight eager crop-preview computation — cancelled and replaced on every
+    /// retrigger (toggle, manual pick, selection change) so a slow Vision request for an abandoned
+    /// photo can't clobber `aiEvaluatedImage` after the fact. Mirrors the Mac app's `subjectCropTask`.
+    private var subjectCropTask: Task<Void, Never>?
+    /// Whether `suggestAI()` crops to a detected subject before sending the image to the model —
+    /// `SubjectIsolationService`'s auto-crop, or `manualSubjectCropRect` when the user has drawn or
+    /// tapped an override on the big preview. Good for a small/distant subject (a bird/flower filling
+    /// little of the frame); bad for a general scene, where the auto-crop can latch onto an incidental
+    /// foreground object. Off by default; the user flips it on per close-subject session. Persisted;
+    /// the iPad `MetadataPanelView` exposes it as a "Crop to Subject" Toggle. Turning it on (or
+    /// changing photos while on) eagerly computes and shows the crop via `recomputeSubjectCropPreview()`.
+    /// Mirrors the Mac app's `subjectIsolationEnabled`; unlike the Mac's drag-only manual override, the
+    /// iPad adds tap-to-pick so a touch chooses which subject when Vision finds several (`pickSubjectInstance`).
+    @Published private(set) var subjectIsolationEnabled: Bool =
+        UserDefaults.standard.bool(forKey: PhotoBrowserViewModel.subjectIsolationEnabledKey)
+    private static let subjectIsolationEnabledKey = "subjectIsolationEnabled"
+    private var suggestAITask: Task<Void, Never>?
+    private var batchAISuggestionTask: Task<Void, Never>?
+    private static let batchLog = Logger(
+        subsystem: "photos.briansmith.swiftselect", category: "BatchAISuggestion")
+    private static let aiModelDefaultsKey = "aiModelText"
+
+    /// Models (by their `AIModelSelection.presets` string) that use the `.compact` prompt profile —
+    /// small on-device models that misbehave on the full prompt (echo its placeholder keywords,
+    /// over-apply species-ID). `UserDefaults`-persisted, toggled per model in `SettingsView`. Defaults
+    /// to just FastVLM-0.5B; larger models (gemma-3-4b, OpenRouter) default to `.full` and can be
+    /// switched by the user if they turn out to need it. Mirrors the Mac app's `eBirdDisabledModels`.
+    @Published private(set) var compactPromptModels: Set<String> =
+        (UserDefaults.standard.array(forKey: PhotoBrowserViewModel.compactPromptModelsKey) as? [String])
+        .map(Set.init) ?? ["mlx:mlx-community/FastVLM-0.5B-bf16"]
+    private static let compactPromptModelsKey = "compactPromptModels"
+    /// Drives the Settings button label ("Locate…" vs "Change…") and whether Refresh is enabled.
+    /// Seeded from the stored bookmark so a relaunch with a previously-located file starts enabled.
+    @Published private(set) var hasTimelineBookmark: Bool =
+        UserDefaults.standard.data(forKey: PhotoBrowserViewModel.timelineBookmarkKey) != nil
+
+    /// Paths (within the currently loaded folder) that have already been through Process & Move at
+    /// least once — drives a non-blocking "processed" indicator, the same purely-informational role
+    /// as the Mac app's `processedAssetPaths`. Never hides or disables anything: reprocessing must
+    /// stay freely available.
+    @Published private(set) var processedAssetPaths: Set<String> = []
+    private var processedStore: ProcessedStateStore?
+
+    /// Paths of RAW files in the currently loaded folder whose staged sidecar carries
+    /// `RawDevelopService.developMarkerKeyword` — drives the tile badge, and is what
+    /// `performSave` consults to keep the marker alive across an ordinary metadata save.
+    /// iPadOS can't develop a RAW itself (see that keyword's doc comment), so marking is the whole
+    /// of the iPad's part in this: the Mac's iPad import acts on it later.
+    @Published private(set) var developMarkedPaths: Set<String> = []
+
+    /// "Select mode" for the grid — while on, tapping a tile toggles `multiSelectedIDs` instead of
+    /// changing the preview, and a batch Skip/Un-skip action bar becomes available. Turning it off
+    /// always clears the multi-selection rather than leaving stale picks around for next time.
+    @Published var isSelecting = false {
+        didSet {
+            guard !isSelecting else { return }
+            multiSelectedIDs = []
+        }
+    }
+    /// The grid's batch-action selection set (Select mode only) — the touch equivalent of the Mac
+    /// app's cmd/shift-click `multiSelectedIDs`.
+    ///
+    /// `didSet` keeps the big preview pointed at the selection, which is the one thing the touch
+    /// path doesn't get for free: the Mac's `selectTile(_:modifiers:)` sets `selectedAssetID` on
+    /// every click including a modifier-click, so its preview always follows. Doing it here rather
+    /// than in each mutating method covers every path in one place — tap-toggle, shift-range, and
+    /// the clear that `isSelecting = false` performs (a no-op, since an empty selection leaves the
+    /// preview where it is).
+    @Published private(set) var multiSelectedIDs: Set<PhotoAsset.ID> = [] {
+        didSet { previewEarliestMultiSelection() }
+    }
+
+    /// The last tile clicked with a modifier key held — the anchor a subsequent shift-click ranges
+    /// from, mirroring the Mac app's `rangeAnchorID`.
+    private var modifierClickAnchorID: PhotoAsset.ID?
+
+    private let folderBrowser = FolderBrowser()
+    private let assetLoader = PhotoAssetLoader()
+    private let grouping = CaptureGroupingService()
+    private let renameService = RenameService()
+    private let processMoveService = ProcessMoveService(metadataWriter: NativeMetadataWriter())
+    private let videoMoveService = VideoMoveService()
+    private let timelineImportParser = TimelineImportParser()
+    private let elevationService = ElevationLookupService()
+    private let reverseGeocodeService = ReverseGeocodeService()
+    private let openRouterProvider: AIProvider = OpenRouterProvider()
+    private let mlxProvider: AIProvider = MLXNativeProvider()
+    private let foundationProvider: AIProvider = FoundationModelsProvider()
+    private let aiSuggestionService = AISuggestionService()
+    private let ebirdService = EBirdSpeciesListService()
+    private var ebirdCache: EBirdCache?
+    private static let ebirdLogger = Logger(subsystem: "SwiftSelect", category: "EBirdSpecies")
+
+    /// Folder-load timings. A card reached through iPadOS's file provider behaves nothing like a
+    /// mounted one, and the difference is not guessable from the Mac — two rounds of reasoning about
+    /// where the time went (bytes read, then per-file latency) each predicted a speedup far larger
+    /// than the device actually delivered. So the device says where it goes.
+    private static let loadLogger = Logger(subsystem: "SwiftSelect", category: "FolderLoad")
+    private var folderPathByCaptureSetID: [CaptureSet.ID: String] = [:]
+
+    /// The current folder's capture groups as grouping produced them, the user's manual merges over
+    /// the top, and the paths currently skipped. Everything displayed is derived from these three by
+    /// `rederiveCaptureSets()` and never edited directly — see the Mac app's equivalent for why
+    /// per-file skipping needs a single source of truth rather than arrays kept in step.
+    private var automaticCaptureSets: [CaptureSet] = []
+    private var mergeIDsByAssetPath: [String: String] = [:]
+    private var skippedPaths: Set<String> = []
+
+    private var groupedCaptureSets: [CaptureSet] = []
+
+    private var skipStore: SkipStateStore?
+    private var mergeStore: CaptureSetMergeStore?
+    private var sidecarStagingStore: SidecarStagingStore?
+    private var timelineCache: TimelineLocationCache?
+    private var elevationCache: ElevationCache?
+
+    /// Reverse-geocode context text (docs/SPEC.md §6/§7), keyed by capture-set representative id so a
+    /// later AI step (step 8) can pass along location context for whichever set it sources its image
+    /// from. Populated by `lookupLocationKeywordsIfNeeded()`. Mirrors the Mac app's
+    /// `locationContextByRepresentativeID`.
+    private var locationContextByRepresentativeID: [PhotoAsset.ID: String] = [:]
+    /// The reverse-geocode's city/county/state keyword tokens, keyed the same way. The selected set
+    /// gets these folded into the edit buffer instead; a batch run has no buffer, so it reads them
+    /// back from here to fold into what it stages.
+    private var locationKeywordsByRepresentativeID: [PhotoAsset.ID: [String]] = [:]
+    /// eBird candidate-species list text (see `EBirdCandidateFormatting`), keyed the same way and
+    /// populated alongside `locationContextByRepresentativeID` since both come from the same GPS fix.
+    /// Passed to `suggestAI()` so the model prefers a species verified as recorded near the photo's
+    /// location. Mirrors the Mac app's `birdCandidateSpeciesByRepresentativeID`.
+    private var birdCandidateSpeciesByRepresentativeID: [PhotoAsset.ID: String] = [:]
+    /// Lowercased common name -> scientific name for the photo's eBird region, keyed like the
+    /// candidate list. Used after an AI suggestion to attach the correct Latin binomial to whatever
+    /// common name the model produced (a deterministic lookup, not something the small on-device
+    /// models reliably recall) — see `EBirdCandidateFormatting.insertScientificName`.
+    private var birdScientificNamesByRepresentativeID: [PhotoAsset.ID: [String: String]] = [:]
+    /// Capture-set representatives already reverse-geocoded this session — the once-per-set-per-session
+    /// guard so re-viewing a set doesn't re-hit Nominatim. Mirrors `geocodeAppliedRepresentativeIDs`.
+    private var geocodeAppliedRepresentativeIDs: Set<PhotoAsset.ID> = []
+    /// The reverse-geocoded region (county + eBird state code) per representative, stashed so the eBird
+    /// step can retry independently of the geocode memo (e.g. after the key is set mid-session).
+    private var geocodeRegionByRepresentativeID: [PhotoAsset.ID: (county: String, stateRegionCode: String?)] = [:]
+
+    /// Models (`AIModelSelection.presets` strings) that do NOT get the eBird candidate list appended
+    /// to their prompt — the list is extra input-token cost on chargeable OpenRouter models but free
+    /// on local MLX compute, so by default the paid presets are excluded and the free local models get
+    /// it (which is also where the accuracy help is most needed). `UserDefaults`-persisted, toggled
+    /// per model in `SettingsView`. Mirrors the Mac app's `eBirdDisabledModels`.
+    @Published private(set) var eBirdDisabledModels: Set<String> =
+        (UserDefaults.standard.array(forKey: PhotoBrowserViewModel.eBirdDisabledModelsKey) as? [String])
+        .map(Set.init) ?? PhotoBrowserViewModel.defaultEBirdDisabledModels
+    private static let eBirdDisabledModelsKey = "eBirdDisabledModels"
+    private static let defaultEBirdDisabledModels: Set<String> = [
+        "openrouter:google/gemini-2.5-flash",
+        "openrouter:google/gemini-3.1-flash-lite-image",
+    ]
+
+    private static let birdRegionSpeciesMaxAge: TimeInterval = 30 * 24 * 60 * 60
+    private static let birdTaxonomyMaxAge: TimeInterval = 90 * 24 * 60 * 60
+    /// Caps the candidate list so a noisy state-level fallback (1000+ codes) doesn't bloat the prompt.
+    private static let birdCandidateListLimit = 500
+
+    /// `UserDefaults` key for the security-scoped bookmark to the user's `Timeline.json`.
+    private static let timelineBookmarkKey = "TimelineBookmarkData"
+
+    init() {
+        // Best-effort silent import at launch so GPS suggestions are ready before the first folder
+        // is opened, if a `Timeline.json` was located in an earlier session.
+        importTimelineIfNeeded()
+    }
+
+    /// The root `.fileImporter` hands back is only guaranteed accessible for the synchronous
+    /// duration of its completion closure — reading it afterward (which `load(_:)`'s `Task`s always
+    /// do) needs an explicit, held-open `startAccessingSecurityScopedResource()` call on that root.
+    /// The grant covers the whole subtree while active, so subfolder navigation doesn't need its
+    /// own start/stop calls — only opening a new root does. (The macOS app never needed this: it
+    /// isn't sandboxed the same way, so `SourceBrowserViewModel.openFolder(at:)` skips it entirely.)
+    private var securityScopedRootURL: URL?
+
+    deinit {
+        securityScopedRootURL?.stopAccessingSecurityScopedResource()
+    }
+
+    var displayedCaptureSets: [CaptureSet] {
+        switch sourceViewFilter {
+        case .active: return captureSets
+        case .skipped: return skippedCaptureSets
+        }
+    }
+
+    var selectedCaptureSet: CaptureSet? {
+        displayedCaptureSets.first { $0.representative?.id == selectedAssetID }
+    }
+
+    var previewAsset: PhotoAsset? {
+        guard let captureSet = selectedCaptureSet else { return nil }
+        guard let previewAssetID else { return captureSet.representative }
+        return captureSet.members.first { $0.id == previewAssetID } ?? captureSet.representative
+    }
+
+    /// True when the grid's manual multi-selection (Select mode, or a hardware modifier-click) has
+    /// more than one tile picked — mirrors the Mac app's `hasMultiSelection`. No filmstrip
+    /// ring-selection equivalent exists on iPad (see this type's doc comment), so unlike the Mac
+    /// app's `hasCurrentSelection` this is the whole story for whether "Save (Current Selection)" is
+    /// actionable.
+    var hasMultiSelection: Bool { multiSelectedIDs.count > 1 }
+
+    /// Assets for a "Save (Current Selection)" metadata action (docs/SPEC.md §5's `.manualSelection`
+    /// scope): the grid's manual multi-selection, expanded from representative tiles to full
+    /// capture-group membership so a stacked RAW file behind a selected JPEG representative isn't
+    /// silently skipped.
+    var manualSelectionAssets: [PhotoAsset] {
+        guard hasMultiSelection else { return [] }
+        let assetByID = Dictionary(uniqueKeysWithValues: displayedCaptureSets.flatMap(\.members).map { ($0.id, $0) })
+        let visibleIDs = displayedCaptureSets.compactMap { $0.representative?.id }
+        let ordered = visibleIDs.filter { multiSelectedIDs.contains($0) }
+        let expandedIDs = SelectionScope.expandToCaptureGroups(ordered, membersByID: membersByAssetID)
+        return expandedIDs.compactMap { assetByID[$0] }
+    }
+
+    /// Maps every asset id (within `displayedCaptureSets`) to its full capture-group membership
+    /// (including itself) — the lookup `SelectionScope`'s pure functions need but don't own
+    /// themselves. Mirrors the Mac app's private `membersByAssetID`.
+    private var membersByAssetID: [PhotoAsset.ID: [PhotoAsset.ID]] {
+        var map: [PhotoAsset.ID: [PhotoAsset.ID]] = [:]
+        for set in displayedCaptureSets {
+            let memberIDs = set.members.map(\.id)
+            for id in memberIDs { map[id] = memberIDs }
+        }
+        return map
+    }
+
+    /// Starts a fresh breadcrumb rooted at `folderURL` — called from the "Open Folder…" picker,
+    /// which on iPad is backed by `UIDocumentPickerViewController` (the same `.fileImporter`
+    /// modifier as the Mac app), so `folderURL` may point at an external volume such as a
+    /// mass-storage-mode camera or SD card reader, not just local app storage.
+    func openFolder(at folderURL: URL) {
+        securityScopedRootURL?.stopAccessingSecurityScopedResource()
+        securityScopedRootURL = folderURL.startAccessingSecurityScopedResource() ? folderURL : nil
+
+        isSelecting = false
+        breadcrumb = [folderURL]
+        load(folderURL)
+    }
+
+    /// Tapping a subfolder chip or a breadcrumb segment. An ancestor already in the breadcrumb
+    /// truncates back to it; a subfolder appends one level.
+    func navigate(to folderURL: URL) {
+        isSelecting = false
+        if let index = breadcrumb.firstIndex(of: folderURL) {
+            breadcrumb.removeSubrange((index + 1)...)
+        } else {
+            breadcrumb.append(folderURL)
+        }
+        load(folderURL)
+    }
+
+    func select(_ assetID: PhotoAsset.ID) {
+        selectedAssetID = assetID
+        previewAssetID = nil
+    }
+
+    func setActivePreview(_ assetID: PhotoAsset.ID) {
+        previewAssetID = assetID
+    }
+
+    /// Moves the preview to the earliest selected tile in grid order — not the most recently tapped
+    /// one. Picking tiles in any order shows the same photo, and adding a later tile to a selection
+    /// doesn't yank the preview away from what you were looking at.
+    ///
+    /// `previewAssetID` is reset so the preview shows that set's representative rather than a
+    /// filmstrip pick left over from the previous selection, matching `select(_:)`.
+    private func previewEarliestMultiSelection() {
+        let visibleIDs = displayedCaptureSets.compactMap { $0.representative?.id }
+        guard
+            let earliestID = SelectionScope.earliest(in: visibleIDs, selected: multiSelectedIDs),
+            earliestID != selectedAssetID
+        else { return }
+        selectedAssetID = earliestID
+        previewAssetID = nil
+    }
+
+    /// Tapping a tile while `isSelecting` is on.
+    func toggleMultiSelect(_ id: PhotoAsset.ID) {
+        if multiSelectedIDs.contains(id) {
+            multiSelectedIDs.remove(id)
+        } else {
+            multiSelectedIDs.insert(id)
+        }
+    }
+
+    /// Cmd-click or shift-click from a hardware keyboard/trackpad, delivered by
+    /// `TileTapCatcher`. Works independently of the touch-only `isSelecting` toggle — a
+    /// modifier-click always means "start multi-selecting," so it turns Select mode on to match
+    /// (the Mac app has no separate "mode" for this at all; clicking with a modifier is enough).
+    func handleModifierClick(_ id: PhotoAsset.ID, flags: UIKeyModifierFlags) {
+        isSelecting = true
+        if flags.contains(.shift), let anchor = modifierClickAnchorID {
+            let visibleIDs = displayedCaptureSets.compactMap { $0.representative?.id }
+            multiSelectedIDs.formUnion(SelectionScope.rangeBetween(anchor: anchor, target: id, visible: visibleIDs))
+        } else {
+            toggleMultiSelect(id)
+        }
+        modifierClickAnchorID = id
+    }
+
+    /// Skips (or un-skips) every capture set in the multi-selection at once, then leaves Select
+    /// mode. The other consumer of the same multi-selection, `saveMetadata(scope: .manualSelection)`,
+    /// leaves Select mode on its own terms instead (a save can be retried), so it isn't handled here.
+    func performBatchSkipAction() {
+        let targets = displayedCaptureSets.filter { set in
+            guard let id = set.representative?.id else { return false }
+            return multiSelectedIDs.contains(id)
+        }
+        switch sourceViewFilter {
+        case .active: targets.forEach(skip)
+        case .skipped: targets.forEach(unskip)
+        }
+        isSelecting = false
+    }
+
+    /// Hides every member of `captureSet` from the active view — persisted so a re-opened folder
+    /// remembers what was skipped. Never touches the files on disk.
+    func skip(_ captureSet: CaptureSet) {
+        setSkipped(true, assets: captureSet.members, inGroup: captureSet)
+    }
+
+    func unskip(_ captureSet: CaptureSet) {
+        setSkipped(false, assets: captureSet.members, inGroup: captureSet)
+    }
+
+    /// Skips one image out of its capture set, leaving the set's other members active — the
+    /// filmstrip's per-file counterpart to `skip(_:)`, for culling individual frames out of a focus
+    /// bracket or a burst rather than discarding the whole sequence. Mirrors the Mac app's
+    /// `SourceBrowserViewModel.skipMember(_:)`; long-press a filmstrip thumbnail to reach it.
+    func skipMember(_ asset: PhotoAsset) {
+        guard let group = group(containing: asset.id) else { return }
+        setSkipped(true, assets: [asset], inGroup: group)
+    }
+
+    /// Returns one culled image to its capture set — the inverse of `skipMember(_:)`, reached from
+    /// the filmstrip while browsing the "Skipped" filter.
+    func unskipMember(_ asset: PhotoAsset) {
+        guard let group = group(containing: asset.id) else { return }
+        setSkipped(false, assets: [asset], inGroup: group)
+    }
+
+    /// Persists a skip-state change for `assets` and republishes both lists from the new partition.
+    /// See the Mac app's `SourceBrowserViewModel.setSkipped(_:assets:inGroup:)` for why this
+    /// re-derives both lists rather than splicing sets between them.
+    private func setSkipped(_ isSkipped: Bool, assets: [PhotoAsset], inGroup group: CaptureSet) {
+        guard let folderPath = folderPathByCaptureSetID[group.id] else { return }
+        let assetPaths = assets.map(\.url.path)
+        Task {
+            guard let store = await ensureSkipStore() else { return }
+            if isSkipped {
+                try? await store.skip(assetPaths: assetPaths, inFolder: folderPath)
+                skippedPaths.formUnion(assetPaths)
+            } else {
+                try? await store.unskip(assetPaths: assetPaths, inFolder: folderPath)
+                skippedPaths.subtract(assetPaths)
+            }
+
+            // Read before re-partitioning, while the displayed list is still the one the user acted on.
+            let previousIndex = displayedCaptureSets.firstIndex { $0.id == group.id } ?? 0
+            rederiveCaptureSets()
+            reconcileSelection(afterChangeTo: group.id, previousIndex: previousIndex)
+        }
+    }
+
+    /// Rebuilds everything shown from the three stored inputs: grouping, the user's manual merges,
+    /// then the split into active and skipped.
+    private func rederiveCaptureSets() {
+        groupedCaptureSets = CaptureSetMerging.apply(
+            automaticCaptureSets, mergeIDsByAssetPath: mergeIDsByAssetPath)
+        let partition = SkipPartition.split(groupedCaptureSets, skippedPaths: skippedPaths)
+        captureSets = partition.active
+        skippedCaptureSets = partition.skipped
+    }
+
+    /// The grouped capture sets the grid's multi-selection covers. Resolved back to the grouping
+    /// rather than read off `displayedCaptureSets`, so a set with some members skipped is merged
+    /// whole rather than losing its culled frames.
+    private var multiSelectedGroups: [CaptureSet] {
+        let selectedIDs = Set(
+            displayedCaptureSets.filter { set in
+                set.representative.map { multiSelectedIDs.contains($0.id) } ?? false
+            }.map(\.id))
+        return groupedCaptureSets.filter { selectedIDs.contains($0.id) }
+    }
+
+    /// Whether the Merge action has anything to act on — two or more sets picked in Select mode.
+    var canMergeSelection: Bool { multiSelectedGroups.count > 1 }
+
+    /// Whether this set is one the user merged by hand, i.e. whether it can be split apart again.
+    func isMerged(_ captureSet: CaptureSet) -> Bool {
+        captureSet.members.contains { mergeIDsByAssetPath[$0.url.path] != nil }
+    }
+
+    /// Combines every selected capture set into one and remembers the choice for this folder. It
+    /// matters more here than on the Mac: iPad groups on the timestamp gap alone, so this is the
+    /// only way to put back together a capture the maker-note counter would have held whole.
+    func mergeSelectedCaptureSets() {
+        let groups = multiSelectedGroups
+        guard groups.count > 1, let folderPath = folderPathByCaptureSetID[groups[0].id] else { return }
+        let assetPaths = groups.flatMap { $0.members.map(\.url.path) }
+        let previousIndex = displayedCaptureSets.firstIndex { $0.id == groups[0].id } ?? 0
+        Task {
+            guard let store = await ensureMergeStore(),
+                let mergeID = try? await store.merge(assetPaths: assetPaths, inFolder: folderPath)
+            else { return }
+            for path in assetPaths { mergeIDsByAssetPath[path] = mergeID }
+            rederiveCaptureSets()
+            reconcileSelection(afterChangeTo: groups[0].id, previousIndex: previousIndex)
+        }
+    }
+
+    /// Undoes a manual merge, letting grouping's own answer stand again.
+    func splitApart(_ captureSet: CaptureSet) {
+        guard let folderPath = folderPathByCaptureSetID[captureSet.id],
+            let group = groupedCaptureSets.first(where: { $0.id == captureSet.id })
+        else { return }
+        let assetPaths = group.members.map(\.url.path)
+        let previousIndex = displayedCaptureSets.firstIndex { $0.id == group.id } ?? 0
+        Task {
+            guard let store = await ensureMergeStore() else { return }
+            try? await store.unmerge(assetPaths: assetPaths, inFolder: folderPath)
+            for path in assetPaths { mergeIDsByAssetPath.removeValue(forKey: path) }
+            rederiveCaptureSets()
+            reconcileSelection(afterChangeTo: group.id, previousIndex: previousIndex)
+        }
+    }
+
+    private func ensureMergeStore() async -> CaptureSetMergeStore? {
+        if let mergeStore { return mergeStore }
+        do {
+            let databasePath = try AppSupportDirectory.url(forFileNamed: "capture_set_merges.sqlite3")
+            let store = try CaptureSetMergeStore(databasePath: databasePath)
+            mergeStore = store
+            return store
+        } catch {
+            loadErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func mergeIDs(inFolder folderURL: URL) async -> [String: String] {
+        guard let store = await ensureMergeStore() else { return [:] }
+        return (try? await store.mergeIDsByAssetPath(inFolder: folderURL.path)) ?? [:]
+    }
+
+    private func group(containing assetID: PhotoAsset.ID) -> CaptureSet? {
+        groupedCaptureSets.first { $0.members.contains { $0.id == assetID } }
+    }
+
+    /// Re-points grid selection and filmstrip preview after a skip/un-skip re-partitioned the lists.
+    /// Unlike the Mac app this has two ids to settle: `previewAssetID` already falls back to the
+    /// representative on its own (see `previewAsset`), so it only has to be cleared when the frame it
+    /// names is gone, while `selectedAssetID` moves to the surviving set, or to the next set when
+    /// this one emptied out of the displayed list.
+    private func reconcileSelection(afterChangeTo groupID: CaptureSet.ID, previousIndex: Int) {
+        let displayed = displayedCaptureSets
+        multiSelectedIDs = multiSelectedIDs.filter { id in
+            displayed.contains { $0.representative?.id == id }
+        }
+
+        if let previewAssetID,
+            !displayed.contains(where: { set in set.members.contains { $0.id == previewAssetID } })
+        {
+            self.previewAssetID = nil
+        }
+
+        // Matched on `representative` rather than membership, because that is exactly what makes
+        // `selectedCaptureSet` resolve here: on iPad `selectedAssetID` is always a grid tile's
+        // representative, and a filmstrip pick lives in `previewAssetID` instead. Skipping the
+        // representative promotes a new one, which this then has to follow.
+        if displayed.contains(where: { $0.representative?.id == selectedAssetID }) {
+            return
+        }
+        if let survivor = displayed.first(where: { $0.id == groupID }),
+            let representativeID = survivor.representative?.id
+        {
+            selectedAssetID = representativeID
+            previewAssetID = nil
+        } else {
+            selectTileAfterRemoval(from: displayed, previousIndex: previousIndex)
+        }
+    }
+
+    /// Resyncs the metadata edit buffer to `previewAsset`'s current values whenever the selection or
+    /// active preview changes. Checks for a previously staged draft afterward — mirrors the Mac
+    /// app's `SourceBrowserViewModel.loadEditBuffer`, minus GPS/AI state this view model doesn't have
+    /// yet.
+    private func loadEditBuffer() {
+        saveStatusMessage = nil
+        // Shared status line for the Timeline-GPS suggestion — cleared up front so a previous
+        // photo's message (e.g. a matched location) doesn't linger on a newly selected photo.
+        gpsSuggestionStatusMessage = nil
+        // Same reasoning for the previous photo's AI result and the image it was derived from, plus
+        // its subject crop: a manual override belongs to the photo it was drawn on, and the in-flight
+        // crop task is for the outgoing selection.
+        aiStatusMessage = nil
+        aiEvaluatedImage = nil
+        aiEvaluatedImageSourceName = nil
+        subjectCropTask?.cancel()
+        manualSubjectCropRect = nil
+        guard let asset = previewAsset else {
+            editableDescription = ""
+            editableKeywords = ""
+            loadedKeywords = []
+            updateRenamePreview()
+            return
+        }
+        editableDescription = asset.descriptionText
+        editableKeywords = asset.keywords.joined(separator: ", ")
+        loadedKeywords = asset.keywords
+        updateRenamePreview()
+        applyStagedDraftIfPresent(for: asset)
+        // With the toggle on, eagerly recompute the auto-crop for the newly previewed photo so the
+        // "Evaluated" thumbnail tracks the selection without waiting for a Suggest — mirrors the Mac.
+        if subjectIsolationEnabled {
+            recomputeSubjectCropPreview()
+        }
+    }
+
+    /// Recomputes `renamePreviewFilename` for `previewAsset` against `sessionBatch`'s current value
+    /// — mirrors the Mac app's `updateRenamePreview`, using `previewAsset` (the filmstrip's active
+    /// pick) rather than `selectedAssetID` directly, since on iPad those are deliberately separate
+    /// (see this type's doc comment) and it's whichever file is shown large that a rename preview
+    /// should track.
+    private func updateRenamePreview() {
+        guard let asset = previewAsset else {
+            renamePreviewFilename = ""
+            return
+        }
+        let context = RenameContext(
+            sourceURL: asset.url,
+            capturedAt: asset.capturedAt,
+            cameraModel: asset.cameraModel,
+            lensModel: asset.lensModel,
+            batch: sessionBatch,
+            artFilterToken: asset.artFilterToken)
+        let candidate = renameService.buildFilename(for: context)
+
+        var existingNames = Self.existingFileNames(in: asset.url.deletingLastPathComponent())
+        existingNames.remove(asset.url.lastPathComponent)
+        renamePreviewFilename = renameService.ensureUniqueName(candidate, existingNames: existingNames)
+    }
+
+    private static func existingFileNames(in directory: URL) -> Set<String> {
+        let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
+        return Set(names ?? [])
+    }
+
+    /// Overwrites the just-loaded buffer with a previously staged (unsaved-to-original-file) draft,
+    /// if one exists — lets re-selecting a photo pick back up mid-edit rather than reverting to
+    /// what's still on disk. Store lookup is async, so this re-checks `previewAsset` before writing
+    /// into the buffer in case the selection moved on again while the lookup was in flight.
+    private func applyStagedDraftIfPresent(for asset: PhotoAsset) {
+        Task {
+            guard let store = await ensureSidecarStagingStore() else { return }
+            guard let draft = try? store.stagedDraft(for: asset.url) else { return }
+            guard previewAsset?.id == asset.id else { return }
+            editableDescription = draft.description
+            // The develop marker is app bookkeeping, not one of the user's keywords, so it stays out
+            // of the editable buffer — `performSave` puts it back when restaging.
+            let keywords = RawDevelopService.removingDevelopMarker(from: draft.keywords)
+            editableKeywords = keywords.joined(separator: ", ")
+            // A restored draft is loaded state, not something typed this session, so it becomes the
+            // baseline `suggestAI` diffs a hand-typed hint against.
+            loadedKeywords = keywords
+        }
+    }
+
+    /// Stages the edit buffer for `scope`'s file(s) via `SidecarStagingStore`, one `stage` call per
+    /// target (the store has no batched-write equivalent of `ExifToolClient.write`, so there's no
+    /// need for the Mac app's per-file `AutoMetadataGroupKey` grouping — that only exists to keep
+    /// differing per-file auto-tokens out of a single batched invocation, and `AutoMetadataRules`
+    /// isn't ported to iPad yet anyway). `title`/`gps` are always `nil`: Title isn't independently
+    /// editable yet (it's rename-derived, per the Mac app's convention, and iPad has no rename yet
+    /// either) and GPS editing isn't built on iPad yet.
+    ///
+    /// No-op while a previous save is still running.
+    func saveMetadata(scope: MetadataSaveScope) {
+        Task { await performSave(scope: scope) }
+    }
+
+    private func performSave(scope: MetadataSaveScope) async {
+        let targets: [PhotoAsset]
+        switch scope {
+        case .singleAsset(let asset): targets = [asset]
+        case .captureSet(let captureSet): targets = captureSet.members
+        case .manualSelection(let assets): targets = assets
+        }
+        await writeMetadata(
+            description: editableDescription,
+            keywords: MetadataEditParsing.parseKeywords(editableKeywords), to: targets)
+    }
+
+    /// The staging write itself, on values passed in rather than read off the edit buffer — which is
+    /// what lets `runBatchAISuggestion()` stage each capture set the model's own answer for that set,
+    /// while the panel's buffer still belongs to whichever set the user has selected.
+    private func writeMetadata(
+        description: String, keywords: [String], to targets: [PhotoAsset]
+    ) async {
+        guard !isSavingMetadata, !targets.isEmpty else { return }
+
+        isSavingMetadata = true
+        saveStatusMessage = "Saving…"
+        defer { isSavingMetadata = false }
+        guard let store = await ensureSidecarStagingStore() else { return }
+
+        var failureCount = 0
+        for target in targets {
+            do {
+                // GPS is staged per-target from the asset's own fields (a Timeline suggestion applied
+                // by `suggestGPSIfNeeded()`, or embedded GPS), not the shared buffer — each photo may
+                // carry its own fix. `title` stays nil (rename-derived, only written at Process time).
+                try await store.stage(
+                    title: nil, description: description,
+                    keywords: keywordsToStage(keywords, for: target),
+                    gps: Self.gpsCoordinate(for: target), for: target.url)
+                updateAsset(target.id) { updated in
+                    updated.descriptionText = description
+                    updated.keywords = keywords
+                }
+            } catch {
+                failureCount += 1
+            }
+        }
+        saveStatusMessage =
+            failureCount == 0
+            ? "Saved to \(targets.count) file(s)."
+            : "Saved \(targets.count - failureCount)/\(targets.count) file(s); \(failureCount) failed."
+    }
+
+    /// `keywords` plus the develop marker when this file is marked. A save rewrites the whole
+    /// sidecar, so without this an ordinary edit would quietly drop a pending develop request.
+    private func keywordsToStage(_ keywords: [String], for asset: PhotoAsset) -> [String] {
+        guard developMarkedPaths.contains(asset.url.path) else { return keywords }
+        return keywords + [RawDevelopService.developMarkerKeyword]
+    }
+
+    // MARK: - Mark for RAW develop (docs/SPEC.md §5)
+
+    /// RAW members are the only files a develop marker means anything on — a capture set's SOOC
+    /// JPEG is already developed.
+    private static func rawMembers(of captureSet: CaptureSet) -> [PhotoAsset] {
+        captureSet.members.filter { PhotoAssetLoader.isRaw($0.url) }
+    }
+
+    func canMarkForRawDevelop(_ captureSet: CaptureSet) -> Bool {
+        !Self.rawMembers(of: captureSet).isEmpty
+    }
+
+    func isMarkedForRawDevelop(_ captureSet: CaptureSet) -> Bool {
+        Self.rawMembers(of: captureSet).contains { developMarkedPaths.contains($0.url.path) }
+    }
+
+    /// Marks (or unmarks) every RAW in `captureSet` for the Mac to develop at import time. The
+    /// marker is a keyword in the staged sidecar rather than a new store of its own, so it travels
+    /// through Process & Move into the destination copy's `.xmp` with no new transport.
+    func toggleRawDevelopMark(_ captureSet: CaptureSet) {
+        let targets = Self.rawMembers(of: captureSet)
+        guard !targets.isEmpty else { return }
+        let shouldMark = !isMarkedForRawDevelop(captureSet)
+        Task {
+            guard let store = await ensureSidecarStagingStore() else { return }
+            for target in targets {
+                await restage(target, markedForDevelop: shouldMark, in: store)
+            }
+        }
+    }
+
+    /// Adds or removes the marker in `asset`'s staged sidecar. `stage` rewrites the sidecar whole,
+    /// so any existing draft has to be read back and passed through rather than overwritten with a
+    /// marker-only one.
+    private func restage(
+        _ asset: PhotoAsset, markedForDevelop: Bool, in store: SidecarStagingStore
+    ) async {
+        let draft = try? store.stagedDraft(for: asset.url)
+        var keywords = RawDevelopService.removingDevelopMarker(from: draft?.keywords ?? asset.keywords)
+        if markedForDevelop { keywords.append(RawDevelopService.developMarkerKeyword) }
+        do {
+            try await store.stage(
+                title: draft?.title, description: draft?.description ?? asset.descriptionText,
+                keywords: keywords, gps: draft?.gps ?? Self.gpsCoordinate(for: asset), for: asset.url)
+            if markedForDevelop {
+                developMarkedPaths.insert(asset.url.path)
+            } else {
+                developMarkedPaths.remove(asset.url.path)
+            }
+        } catch {
+            saveStatusMessage =
+                "Could not mark \(asset.url.lastPathComponent) for RAW develop: \(error.localizedDescription)"
+        }
+    }
+
+    /// Puts every previously staged edit back onto the just-loaded assets, and collects which RAWs
+    /// are marked for develop, in a single pass over the staging store.
+    ///
+    /// Without this, a staged draft only ever reached an asset when its photo was previewed
+    /// (`applyStagedDraftIfPresent`) or processed — so reopening a card on the second evening of a
+    /// trip showed a grid with no sign of the work already done on it, and batch AI's "skip sets
+    /// that already have a description" rule read the untouched original file and offered to
+    /// re-describe everything. The originals on the card carry no metadata by design, so the staged
+    /// drafts are the only record of a session's tagging until Process & Move runs.
+    ///
+    /// The develop marker is app bookkeeping rather than one of the user's keywords, so it is
+    /// stripped out here the same way `applyStagedDraftIfPresent` strips it from the edit buffer.
+    private func applyStagedDrafts(to assets: [PhotoAsset]) async -> (
+        assets: [PhotoAsset], developMarkedPaths: Set<String>, restoredCount: Int
+    ) {
+        guard let store = await ensureSidecarStagingStore() else { return (assets, [], 0) }
+        var updated = assets
+        var developMarkedPaths: Set<String> = []
+        var restoredCount = 0
+        for index in updated.indices {
+            guard let draft = try? store.stagedDraft(for: updated[index].url) else { continue }
+            restoredCount += 1
+            if PhotoAssetLoader.isRaw(updated[index].url),
+                RawDevelopService.isMarkedForDevelop(draft.keywords)
+            {
+                developMarkedPaths.insert(updated[index].url.path)
+            }
+            updated[index].descriptionText = draft.description
+            updated[index].keywords = RawDevelopService.removingDevelopMarker(from: draft.keywords)
+            // Originals carry no GPS (the card is never written to), so a staged fix is the only one
+            // there is — and the grouping/AI steps downstream read it off the asset.
+            if let gps = draft.gps {
+                updated[index].gpsLatitude = gps.latitude
+                updated[index].gpsLongitude = gps.longitude
+                updated[index].gpsAltitude = gps.altitude
+            }
+        }
+        return (updated, developMarkedPaths, restoredCount)
+    }
+
+    /// Mutates the in-memory asset so the grid/preview reflect a successful save immediately, without
+    /// a full reload. Writes to `automaticCaptureSets` and re-derives — mirrors the Mac app's
+    /// `SourceBrowserViewModel.updateAsset`, including why the published arrays aren't edited directly.
+    private func updateAsset(_ id: PhotoAsset.ID, _ mutate: (inout PhotoAsset) -> Void) {
+        for setIndex in automaticCaptureSets.indices {
+            if let memberIndex = automaticCaptureSets[setIndex].members.firstIndex(where: { $0.id == id }) {
+                mutate(&automaticCaptureSets[setIndex].members[memberIndex])
+                rederiveCaptureSets()
+                return
+            }
+        }
+    }
+
+    /// Resolves `scope` to its concrete assets (see `ProcessMoveScope.assets`) and copies each into
+    /// `libraryRootURL` via `ProcessMoveService`, per docs/SPEC.md §5 — mirrors the Mac app's
+    /// `process(scope:libraryRoot:)`, minus the `libraryRoot` parameter since iPad's is a fixed local
+    /// folder rather than something picked per call (see `libraryRootURL`'s doc comment). Before
+    /// copying, checks `SidecarStagingStore` for a draft staged in an earlier session that never got
+    /// loaded into `editableDescription`/`editableKeywords` this time around (e.g. this asset was
+    /// never previewed this session): without this, a prior session's staged edit could be silently
+    /// dropped, since `ProcessMoveService` only ever sees whatever description/keywords are already
+    /// on the `PhotoAsset` value it's handed.
+    ///
+    /// One asset's failure doesn't stop the rest of the scope from processing — failures are
+    /// collected and surfaced together afterward via `processStatusMessage`. No-op while a previous
+    /// call is still running, and no-op on an empty scope. Unlike the Mac app, there's no
+    /// `loadArtFilterTokens` step first: iPad has no exiftool, so `asset.artFilterToken` is whatever
+    /// `NativeMetadataReader` already found — nothing, for Olympus maker notes, a pre-existing
+    /// documented gap.
+    ///
+    /// A video takes the other branch: it has no metadata to fold in and no rename to do, so it is
+    /// staged under `IPadVideoBundle.stagingDirectory` inside the same package, carrying the batch
+    /// label in its folder for the Mac's import to redeem into `~/videotmp` (docs/SPEC.md §9).
+    func process(scope: ProcessMoveScope) {
+        guard !isProcessing else { return }
+        let assets = scope.assets
+        guard !assets.isEmpty else { return }
+        // Captured now, not read from `breadcrumb.last` after the `Task` finishes — mirrors
+        // `skip(_:)`'s reasoning: the user could navigate to a different folder while this is still
+        // running.
+        let folderPath = breadcrumb.last?.path
+
+        isProcessing = true
+        processedFileCount = 0
+        processTotalCount = assets.count
+        processStatusMessage = "Processing \(assets.count) file(s)…"
+        Task {
+            defer { isProcessing = false }
+            guard let stagingStore = await ensureSidecarStagingStore() else { return }
+            var failures: [String] = []
+            var processedPaths: [String] = []
+            for asset in assets {
+                var asset = asset
+                processStatusMessage =
+                    "Processing \(processedFileCount + 1) of \(assets.count): \(asset.url.lastPathComponent)"
+                if !asset.isVideo, let draft = try? stagingStore.stagedDraft(for: asset.url) {
+                    asset.descriptionText = draft.description
+                    asset.keywords = draft.keywords
+                    // Recover a GPS fix staged in an earlier session that this run's in-memory asset
+                    // lost on reload (originals carry no GPS, so `NativeMetadataReader` re-reads none).
+                    if asset.gpsLatitude == nil, let gps = draft.gps {
+                        asset.gpsLatitude = gps.latitude
+                        asset.gpsLongitude = gps.longitude
+                        asset.gpsAltitude = gps.altitude
+                    }
+                }
+                do {
+                    if asset.isVideo {
+                        // Staged inside the package rather than moved: the iPad can't reach
+                        // ~/videotmp, so the Mac's import finishes the move. Same copy-verify-rename
+                        // as the Mac's, only the destination root differs.
+                        _ = try await videoMoveService.processAndCopy(
+                            asset: asset, batch: sessionBatch,
+                            destinationRoot: IPadVideoBundle.stagingRoot(in: libraryRootURL))
+                    } else {
+                        let context = RenameContext(
+                            sourceURL: asset.url,
+                            capturedAt: asset.capturedAt,
+                            cameraModel: asset.cameraModel,
+                            lensModel: asset.lensModel,
+                            batch: sessionBatch,
+                            artFilterToken: asset.artFilterToken)
+                        _ = try await processMoveService.processAndCopy(
+                            asset: asset, renameContext: context, libraryRoot: libraryRootURL)
+                    }
+                    processedPaths.append(asset.url.path)
+                } catch {
+                    failures.append("\(asset.url.lastPathComponent): \(error.localizedDescription)")
+                }
+                processedFileCount += 1
+            }
+            if let folderPath, !processedPaths.isEmpty {
+                await markAssetsProcessed(processedPaths, inFolder: folderPath)
+            }
+            let successCount = assets.count - failures.count
+            if failures.isEmpty {
+                processStatusMessage = "Processed \(successCount) file(s)."
+            } else {
+                processStatusMessage =
+                    "Processed \(successCount)/\(assets.count) file(s); \(failures.count) failed:\n"
+                    + failures.joined(separator: "\n")
+            }
+        }
+    }
+
+    private func ensureProcessedStore() async -> ProcessedStateStore? {
+        if let processedStore { return processedStore }
+        do {
+            let databasePath = try AppSupportDirectory.url(forFileNamed: "processed_state.sqlite3")
+            let store = try ProcessedStateStore(databasePath: databasePath)
+            processedStore = store
+            return store
+        } catch {
+            return nil
+        }
+    }
+
+    private func loadProcessedAssetPaths(inFolder folderURL: URL) async -> Set<String> {
+        guard let store = await ensureProcessedStore() else { return [] }
+        return (try? await store.processedAssetPaths(inFolder: folderURL.path)) ?? []
+    }
+
+    /// Persists `assetPaths` as processed for `folderPath` and updates the in-memory set so the
+    /// indicator appears immediately, without waiting for the next folder load.
+    private func markAssetsProcessed(_ assetPaths: [String], inFolder folderPath: String) async {
+        guard let store = await ensureProcessedStore() else { return }
+        try? await store.markProcessed(assetPaths: assetPaths, inFolder: folderPath)
+        processedAssetPaths.formUnion(assetPaths)
+    }
+
+    /// Whether `asset` has already been through Process & Move at least once in this folder.
+    func isProcessed(_ asset: PhotoAsset) -> Bool {
+        processedAssetPaths.contains(asset.url.path)
+    }
+
+    /// Whether this set has been described at all — the grid's "I have already worked on this one"
+    /// mark. Reads the in-memory asset, which `applyStagedDrafts` has already restored from staging,
+    /// so it is true across sessions without a second store read per tile. Same rule as
+    /// `BatchAISuggestionTargets`, which decides what a batch run may skip.
+    func isTagged(_ captureSet: CaptureSet) -> Bool {
+        BatchAISuggestionTargets.hasDescription(captureSet)
+    }
+
+    /// Whether any member of `captureSet` has already been through Process & Move — a set is shown
+    /// as processed as soon as one member has, since the common case processes the whole set at once.
+    func isProcessed(_ captureSet: CaptureSet) -> Bool {
+        captureSet.members.contains { processedAssetPaths.contains($0.url.path) }
+    }
+
+    /// How many staged edits exist right now, refreshed by `refreshStagedEditCount()` — Settings
+    /// shows it so "Clear Staged Edits" says what it would discard before it is pressed.
+    @Published private(set) var stagedEditCount = 0
+    @Published var stagedEditsStatusMessage: String?
+
+    func refreshStagedEditCount() {
+        Task {
+            guard let store = await ensureSidecarStagingStore() else { return }
+            stagedEditCount = (try? store.stagedDraftCount()) ?? 0
+        }
+    }
+
+    /// Discards every staged edit. Nothing else ever removes one — a Process & Move reads a draft
+    /// and leaves it behind — so without this, descriptions written during testing stay in the app
+    /// container indefinitely and come back the next time the same file is previewed.
+    ///
+    /// The in-memory buffer and the loaded assets are deliberately left alone: this clears what is
+    /// on disk, and what is on screen is still the user's unsaved work until they navigate away.
+    func clearStagedEdits() {
+        Task {
+            guard let store = await ensureSidecarStagingStore() else { return }
+            do {
+                let removed = try store.clearStagedDrafts()
+                stagedEditCount = 0
+                stagedEditsStatusMessage = "Cleared \(removed) staged edit(s)."
+            } catch {
+                stagedEditsStatusMessage = "Could not clear staged edits: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func ensureSidecarStagingStore() async -> SidecarStagingStore? {
+        if let sidecarStagingStore { return sidecarStagingStore }
+        do {
+            let store = try SidecarStagingStore.makeDefault()
+            sidecarStagingStore = store
+            return store
+        } catch {
+            loadErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func load(_ folderURL: URL) {
+        isLoading = true
+        loadErrorMessage = nil
+        // Re-check the located Timeline.json on every folder open/navigate so a Drive update mid-
+        // session is picked up without relaunching — mirrors the Mac app calling its Timeline sync
+        // from `load(_:)`. Cheap: a no-op stat when the file's (size, mtime) signature is unchanged.
+        importTimelineIfNeeded()
+        Task {
+            defer { isLoading = false }
+            do {
+                let startedAt = Date()
+                async let assetsTask = assetLoader.loadAssets(in: folderURL)
+                async let subfoldersTask = folderBrowser.subfolders(of: folderURL)
+                let (loadedAssets, folders) = try await (assetsTask, subfoldersTask)
+                let assetsAt = Date()
+                skippedPaths = await skippedAssetPaths(inFolder: folderURL)
+                processedAssetPaths = await loadProcessedAssetPaths(inFolder: folderURL)
+                let staged = await applyStagedDrafts(to: loadedAssets)
+                let assets = staged.assets
+                developMarkedPaths = staged.developMarkedPaths
+                let stagedAt = Date()
+                // The same camera signals the Mac groups on, read straight out of the frame's own
+                // bytes. exiftool cannot run here and ImageIO exposes no maker-note dictionary, but
+                // the Olympus note is in the file regardless and `OlympusMakerNoteReader` walks to
+                // it unaided — so this is not a lesser iPad path, it is the same six checks on the
+                // same inputs. Without it the timestamp gap is all there is, which merges bursts
+                // shot back to back and shatters every interval run into singles. See docs/SPEC.md §1.
+                let signals = await OlympusMakerNoteReader.signals(at: assets.map(\.url))
+                let signalsAt = Date()
+                let allSets = grouping.group(assets, signals: signals)
+                Self.loadLogger.log(
+                    """
+                    Folder load: \(assets.count) files, \
+                    ImageIO pass \(assetsAt.timeIntervalSince(startedAt), format: .fixed(precision: 1))s, \
+                    staged-edit pass \(stagedAt.timeIntervalSince(assetsAt), format: .fixed(precision: 1))s \
+                    restoring \(staged.restoredCount), \
+                    maker-note pass \(signalsAt.timeIntervalSince(stagedAt), format: .fixed(precision: 1))s, \
+                    read \(signals.count) of them, \
+                    folder \(folderURL.path, privacy: .public)
+                    """)
+                automaticCaptureSets = allSets
+                mergeIDsByAssetPath = await mergeIDs(inFolder: folderURL)
+                rederiveCaptureSets()
+                folderPathByCaptureSetID = Dictionary(uniqueKeysWithValues: allSets.map { ($0.id, folderURL.path) })
+                subfolders = folders
+                selectFirstTile()
+            } catch {
+                loadErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func selectFirstTile() {
+        guard let id = displayedCaptureSets.first?.representative?.id else {
+            selectedAssetID = nil
+            previewAssetID = nil
+            return
+        }
+        selectedAssetID = id
+        previewAssetID = nil
+    }
+
+    private func selectTileAfterRemoval(from sets: [CaptureSet], previousIndex: Int) {
+        guard !sets.isEmpty else {
+            selectedAssetID = nil
+            previewAssetID = nil
+            return
+        }
+        let index = min(previousIndex, sets.count - 1)
+        selectedAssetID = sets[index].representative?.id
+        previewAssetID = nil
+    }
+
+    private func skippedAssetPaths(inFolder folderURL: URL) async -> Set<String> {
+        guard let store = await ensureSkipStore() else { return [] }
+        return (try? await store.skippedAssetPaths(inFolder: folderURL.path)) ?? []
+    }
+
+    private func ensureSkipStore() async -> SkipStateStore? {
+        if let skipStore { return skipStore }
+        do {
+            let databasePath = try AppSupportDirectory.url(forFileNamed: "skip_state.sqlite3")
+            let store = try SkipStateStore(databasePath: databasePath)
+            skipStore = store
+            return store
+        } catch {
+            loadErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - Timeline GPS suggestion (docs/SPEC.md §7)
+
+    /// Called from `SettingsView`'s document picker once the user locates `Timeline.json` inside the
+    /// Google Drive Files provider. Persists a security-scoped bookmark so later launches re-open the
+    /// same file without re-prompting, then imports it. On iOS a picker URL is only readable inside a
+    /// held-open `startAccessingSecurityScopedResource()` scope — including while creating the bookmark.
+    func locateTimelineFile(at url: URL) {
+        guard url.startAccessingSecurityScopedResource() else {
+            timelineStatusMessage = "Couldn't access the selected file."
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        do {
+            let bookmark = try url.bookmarkData()
+            UserDefaults.standard.set(bookmark, forKey: Self.timelineBookmarkKey)
+            hasTimelineBookmark = true
+        } catch {
+            timelineStatusMessage = "Couldn't remember that file: \(error.localizedDescription)"
+            return
+        }
+        Task { await importTimeline(reportStatus: true) }
+    }
+
+    /// Best-effort silent import from the stored bookmark (launch / folder-load). No status text on a
+    /// no-op or failure — a missing/unreadable Timeline just leaves GPS suggestions unavailable, same
+    /// non-fatal posture as the Mac app's `syncAndImportTimelineIfNeeded()`.
+    func importTimelineIfNeeded() {
+        Task { await importTimeline(reportStatus: false) }
+    }
+
+    /// Explicit Settings "Refresh" action — same import, but reports the outcome since a user who
+    /// tapped a button expects to see what happened. Mirrors the Mac app's `refreshTimeline()`.
+    func refreshTimeline() {
+        Task { await importTimeline(reportStatus: true) }
+    }
+
+    /// Resolves the stored bookmark and imports `Timeline.json` into `timelineCache` when its
+    /// (path, size, mtime) signature has changed since the last import (`isImportNeeded`). The iPad
+    /// counterpart to the Mac app's `performTimelineSync()`, minus the Drive copy-down step — the
+    /// file already lives in the Drive Files provider, reached directly through the bookmark.
+    private func importTimeline(reportStatus: Bool) async {
+        guard let bookmark = UserDefaults.standard.data(forKey: Self.timelineBookmarkKey) else {
+            if reportStatus { timelineStatusMessage = "No Timeline.json located yet." }
+            return
+        }
+        guard !isImportingTimeline else { return }
+        isImportingTimeline = true
+        defer { isImportingTimeline = false }
+
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: bookmark, bookmarkDataIsStale: &isStale) else {
+            if reportStatus { timelineStatusMessage = "Saved Timeline.json can't be opened — locate it again." }
+            return
+        }
+        guard url.startAccessingSecurityScopedResource() else {
+            if reportStatus { timelineStatusMessage = "No access to the saved Timeline.json — locate it again." }
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        if isStale, let refreshed = try? url.bookmarkData() {
+            UserDefaults.standard.set(refreshed, forKey: Self.timelineBookmarkKey)
+        }
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            if reportStatus { timelineStatusMessage = "Timeline.json not found — is it available offline in Drive?" }
+            return
+        }
+        guard let cache = await ensureTimelineCache() else {
+            if reportStatus { timelineStatusMessage = "Timeline database unavailable." }
+            return
+        }
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attributes[.size] as? Int) ?? 0
+            let modificationDate = (attributes[.modificationDate] as? Date) ?? Date()
+            let modificationNanoseconds = Int64(modificationDate.timeIntervalSince1970 * 1_000_000_000)
+
+            guard
+                try await cache.isImportNeeded(
+                    sourcePath: url.path, sourceSize: size,
+                    sourceModificationNanoseconds: modificationNanoseconds)
+            else {
+                if reportStatus { timelineStatusMessage = "Timeline is already up to date." }
+                return
+            }
+
+            // Parsing and hashing a Timeline export is seconds of work even after the scanner
+            // rewrite (`TimelineImportParser.parseISOTimestamp`), and both are synchronous, so on
+            // the main actor they freeze the whole app — at launch, before there is anything on
+            // screen to explain the wait.
+            let parser = timelineImportParser
+            let (samples, sha256) = try await Task.detached(priority: .userInitiated) {
+                (try parser.parseSamples(fromFileAt: url), try FileHashing.sha256(of: url))
+            }.value
+            try await cache.importSamples(
+                samples, sourcePath: url.path, sourceSize: size,
+                sourceModificationNanoseconds: modificationNanoseconds, sourceSHA256: sha256)
+            // Success is worth surfacing even on the silent path — Settings shows it next time it's
+            // opened — but no-ops and failures stay quiet unless the user explicitly asked (Refresh).
+            timelineStatusMessage = "Imported \(samples.count) Timeline point(s)."
+        } catch {
+            if reportStatus { timelineStatusMessage = "Timeline import failed: \(error.localizedDescription)" }
+        }
+    }
+
+    /// Timeline-derived GPS suggestion for the previewed photo, auto-applied on first view of a
+    /// GPS-less photo — mirrors the Mac app's `suggestGPSIfNeeded()` and the reference app's UX
+    /// (docs/SPEC.md §7). Unlike the Mac app, which fills editable lat/long text fields, the iPad
+    /// GPS panel is read-only, so the fix is applied straight to the in-memory asset: it then shows
+    /// in the panel and flows into Process & Move (which reads GPS from the asset) with no save step.
+    ///
+    /// Applied to every member of the previewed capture set that still lacks embedded GPS, since a
+    /// capture set shares one location — this is the Mac app's "GPS is shared across a capture set"
+    /// rule, applied here at suggestion time so a stacked RAW sibling isn't processed GPS-less. Only
+    /// the previewed set is matched (not the whole folder), keeping the per-selection laziness the
+    /// reference app and Mac app both use; a full-session Process still writes whatever GPS each asset
+    /// happens to have, same as the Mac app. The `gpsLatitude == nil` guard makes re-viewing a no-op.
+    /// Chains an elevation lookup after a match, since altitude is never trusted from Timeline itself.
+    func suggestGPSIfNeeded() async {
+        guard sourceViewFilter == .active,
+            let captureSet = selectedCaptureSet,
+            let asset = previewAsset,
+            asset.gpsLatitude == nil, asset.gpsLongitude == nil,
+            let capturedAt = asset.capturedAt
+        else { return }
+        guard let cache = await ensureTimelineCache() else { return }
+
+        let captureTimestampUTC = Int(capturedAt.timeIntervalSince1970)
+        guard let suggestion = try? await cache.suggestion(forCaptureTimestampUTC: captureTimestampUTC),
+            previewAsset?.id == asset.id
+        else { return }
+
+        let targetIDs = captureSet.members
+            .filter { $0.gpsLatitude == nil && $0.gpsLongitude == nil }
+            .map(\.id)
+        for id in targetIDs {
+            updateAsset(id) {
+                $0.gpsLatitude = suggestion.latitude
+                $0.gpsLongitude = suggestion.longitude
+            }
+        }
+        let accuracyText = suggestion.accuracyMeters.map { String(format: ", accuracy %.0fm", $0) } ?? ""
+        gpsSuggestionStatusMessage =
+            "Nearest GPS \(suggestion.ageSeconds / 60)m \(suggestion.ageSeconds % 60)s away "
+            + "(\(suggestion.sourceType)\(accuracyText))"
+
+        await lookupElevation(
+            latitude: suggestion.latitude, longitude: suggestion.longitude, memberIDs: targetIDs)
+    }
+
+    /// Reverse-geocodes the previewed photo's GPS (embedded or freshly Timeline-suggested) into
+    /// city/county/state, merges those into the keyword edit buffer, and stashes the compact context
+    /// text keyed by capture-set representative for a later AI step (step 8) — docs/SPEC.md §6/§7,
+    /// mirrors the Mac app's `lookupLocationKeywordsIfNeeded()`. Reads GPS from the asset (the iPad
+    /// has no editable lat/long buffer) rather than a text field. No-ops without GPS, and only looks
+    /// up once per capture set per session. Meant to run right after `suggestGPSIfNeeded()` in the
+    /// same `.task(id:)` chain, so embedded GPS and just-suggested Timeline GPS are both covered.
+    ///
+    /// Like the Mac app, the merged keywords land in the edit buffer only — they persist when the
+    /// user Saves (which stages them and updates the asset), not automatically. A Process & Move run
+    /// without a prior Save writes the on-asset keywords, not these buffered additions.
+    func lookupLocationKeywordsIfNeeded() async {
+        guard let asset = previewAsset,
+            let latitude = asset.gpsLatitude, let longitude = asset.gpsLongitude,
+            let representativeID = selectedCaptureSet?.representative?.id
+        else { return }
+
+        // Reverse-geocode + merge location keywords once per set per session — memoized on success
+        // only (moved below the network call), so an offline failure retries on the next view. The
+        // resolved region is stashed so the eBird step can retry independently without re-geocoding.
+        if !geocodeAppliedRepresentativeIDs.contains(representativeID),
+            let result = try? await reverseGeocodeService.lookupLocation(
+                latitude: latitude, longitude: longitude)
+        {
+            geocodeAppliedRepresentativeIDs.insert(representativeID)
+            locationContextByRepresentativeID[representativeID] = result.contextText
+            locationKeywordsByRepresentativeID[representativeID] = result.keywordTokens
+            geocodeRegionByRepresentativeID[representativeID] = (result.county, result.stateRegionCode)
+
+            let tokens = result.keywordTokens
+            if !tokens.isEmpty, previewAsset?.id == asset.id {
+                var keywords = MetadataEditParsing.parseKeywords(editableKeywords)
+                var seenLowercased = Set(keywords.map { $0.lowercased() })
+                for token in tokens where seenLowercased.insert(token.lowercased()).inserted {
+                    keywords.append(token)
+                }
+                editableKeywords = keywords.joined(separator: ", ")
+                gpsSuggestionStatusMessage = "Added location keywords: \(tokens.joined(separator: ", "))"
+            }
+        }
+
+        // eBird candidates are decoupled from the geocode memo: retried on each view until they
+        // actually produce a list, so setting the `EBIRD_API_KEY` mid-session takes effect on the next
+        // photo without an app relaunch. Cheap when it can't yet succeed (no key is a Keychain check,
+        // no network); once it succeeds the stored list short-circuits further attempts.
+        if birdCandidateSpeciesByRepresentativeID[representativeID] == nil,
+            let region = geocodeRegionByRepresentativeID[representativeID]
+        {
+            await lookupBirdCandidates(
+                representativeID: representativeID, county: region.county,
+                stateRegionCode: region.stateRegionCode)
+        }
+    }
+
+    /// The same location context and eBird candidate list for a capture set nobody has selected —
+    /// what `lookupLocationKeywordsIfNeeded()` does for the previewed one, minus the edit buffer.
+    ///
+    /// A photo with no GPS of its own falls back to the Timeline point for its capture time, and the
+    /// fallback is treated exactly as `suggestGPSIfNeeded()` treats it on the previewed photo: it is
+    /// applied to the set's members, it feeds the prompt (the location line, and the eBird region the
+    /// candidate species come from), and it becomes location keywords. An earlier cut used it as
+    /// context only, on the grounds that a batch stages sidecars with nobody watching — but the
+    /// camera records no GPS, so that rule fired on every photo and whether a shoot ended up located
+    /// came down to which sets the user had happened to open first. The match is the same
+    /// bounded-window query either way; only the audience differs.
+    ///
+    /// Returns the location keywords for the caller to fold into what it stages, since without a
+    /// buffer to pass through they would otherwise be dropped from a batch-written sidecar.
+    @discardableResult
+    private func ensureAIContext(for captureSet: CaptureSet) async -> [String] {
+        guard let representative = captureSet.representative else { return [] }
+        let representativeID = representative.id
+
+        // Resolved ahead of the geocode memo rather than inside it: a set the user opened before
+        // starting the run is already marked geocoded, and short-circuiting on that would skip the
+        // GPS as well as the lookup it was meant to skip.
+        var coordinate = representative.gpsLatitude.flatMap { latitude in
+            representative.gpsLongitude.map { (latitude: latitude, longitude: $0) }
+        }
+        if coordinate == nil { coordinate = await applyTimelineGPS(to: captureSet) }
+        guard let coordinate else {
+            Self.ebirdLogger.log(
+                "Bird candidates skipped: no GPS and no Timeline point for this capture time")
+            return []
+        }
+
+        guard !geocodeAppliedRepresentativeIDs.contains(representativeID) else {
+            return locationKeywordsByRepresentativeID[representativeID] ?? []
+        }
+        geocodeAppliedRepresentativeIDs.insert(representativeID)
+
+        guard
+            let result = try? await reverseGeocodeService.lookupLocation(
+                latitude: coordinate.latitude, longitude: coordinate.longitude)
+        else { return [] }
+        locationContextByRepresentativeID[representativeID] = result.contextText
+        locationKeywordsByRepresentativeID[representativeID] = result.keywordTokens
+        geocodeRegionByRepresentativeID[representativeID] = (result.county, result.stateRegionCode)
+        await lookupBirdCandidates(
+            representativeID: representativeID, county: result.county,
+            stateRegionCode: result.stateRegionCode)
+        return result.keywordTokens
+    }
+
+    /// Applies the Timeline point nearest this set's capture time to every member that has no GPS of
+    /// its own, and returns it. The batch counterpart to `suggestGPSIfNeeded()`, which does the same
+    /// for the set on screen — writing to the in-memory asset is what makes the location show in the
+    /// panel, stage with the next save, and reach Process & Move, since all three read GPS from the
+    /// asset. Nil when there is no import, no timestamp, or nothing inside the cache's match window.
+    private func applyTimelineGPS(
+        to captureSet: CaptureSet
+    ) async -> (latitude: Double, longitude: Double)? {
+        guard let capturedAt = captureSet.representative?.capturedAt,
+            let cache = await ensureTimelineCache()
+        else { return nil }
+        guard
+            let suggestion = try? await cache.suggestion(
+                forCaptureTimestampUTC: Int(capturedAt.timeIntervalSince1970))
+        else { return nil }
+
+        let targetIDs = captureSet.members
+            .filter { $0.gpsLatitude == nil && $0.gpsLongitude == nil }
+            .map(\.id)
+        for id in targetIDs {
+            updateAsset(id) {
+                $0.gpsLatitude = suggestion.latitude
+                $0.gpsLongitude = suggestion.longitude
+            }
+        }
+        // Altitude is never trusted from Timeline itself (SPEC.md §7), same as the previewed path.
+        await lookupElevation(
+            latitude: suggestion.latitude, longitude: suggestion.longitude, memberIDs: targetIDs)
+        return (suggestion.latitude, suggestion.longitude)
+    }
+
+    /// Called from `SettingsView`'s per-model eBird toggle. Persists the set.
+    func setEBirdCandidateListEnabled(_ enabled: Bool, forModel model: String) {
+        if enabled {
+            eBirdDisabledModels.remove(model)
+        } else {
+            eBirdDisabledModels.insert(model)
+        }
+        UserDefaults.standard.set(Array(eBirdDisabledModels), forKey: Self.eBirdDisabledModelsKey)
+    }
+
+    /// Resolves `county` (falling back to the bare `stateRegionCode`) to an eBird region code,
+    /// fetches/caches that region's species list + the global taxonomy, and stores the formatted
+    /// candidate list for `suggestAI()` to pass along. Best-effort — a no-op just means the AI prompt
+    /// goes out without a candidate list (same posture as `lookupLocationKeywordsIfNeeded`). Every
+    /// no-op logs why: a silent failure here previously cost a debug session tracing a fabricated
+    /// species back to a missing `EBIRD_API_KEY` (see [[project_xcode_env_vars]]/`APIKeyStore`).
+    /// Ported from the Mac app's `lookupBirdCandidates`.
+    private func lookupBirdCandidates(
+        representativeID: PhotoAsset.ID, county: String, stateRegionCode: String?
+    ) async {
+        guard let stateRegionCode else {
+            Self.ebirdLogger.log("Bird candidates skipped: no eBird state region code for this location")
+            return
+        }
+        guard APIKeyStore.resolve(envVar: "EBIRD_API_KEY", account: "EBIRD_API_KEY") != nil else {
+            Self.ebirdLogger.log("Bird candidates skipped: EBIRD_API_KEY not set (Keychain)")
+            return
+        }
+        guard let cache = await ensureEBirdCache() else {
+            Self.ebirdLogger.log("Bird candidates skipped: could not open EBirdCache")
+            return
+        }
+
+        var regionCode = stateRegionCode
+        if !county.isEmpty,
+            let regions = try? await ebirdService.fetchSubnational2Regions(parentCode: stateRegionCode),
+            let matched = EBirdCandidateFormatting.matchRegion(countyName: county, in: regions)
+        {
+            regionCode = matched.code
+        }
+
+        guard let codes = await birdSpeciesCodes(forRegionCode: regionCode, cache: cache) else {
+            Self.ebirdLogger.log("Bird candidates skipped: species-code fetch failed")
+            return
+        }
+        guard let taxonomy = await birdTaxonomyEntries(forSpeciesCodes: codes, cache: cache) else {
+            Self.ebirdLogger.log("Bird candidates skipped: taxonomy fetch failed")
+            return
+        }
+
+        // Common names only: roughly halves the prompt (which was slowing the small on-device model),
+        // safe because the binomial is attached afterward by `attachScientificNames`, not produced by
+        // the model.
+        let candidateList = EBirdCandidateFormatting.buildCommonNameList(
+            speciesCodes: codes, taxonomy: taxonomy, limit: Self.birdCandidateListLimit)
+        guard !candidateList.isEmpty else {
+            Self.ebirdLogger.log("Bird candidates skipped: 0 taxonomy matches")
+            return
+        }
+        birdCandidateSpeciesByRepresentativeID[representativeID] = candidateList
+        birdScientificNamesByRepresentativeID[representativeID] =
+            EBirdCandidateFormatting.scientificNameByCommonName(speciesCodes: codes, taxonomy: taxonomy)
+        Self.ebirdLogger.log(
+            "Bird candidates: stored \(codes.count, privacy: .public) species for region=\(regionCode, privacy: .public)"
+        )
+    }
+
+    private func birdSpeciesCodes(forRegionCode regionCode: String, cache: EBirdCache) async -> [String]? {
+        if let cached = try? await cache.cachedSpeciesCodes(regionCode: regionCode),
+            Date().timeIntervalSince(cached.fetchedAt) < Self.birdRegionSpeciesMaxAge
+        {
+            return cached.codes
+        }
+        guard let codes = try? await ebirdService.fetchSpeciesCodes(regionCode: regionCode) else {
+            return nil
+        }
+        try? await cache.storeSpeciesCodes(codes, regionCode: regionCode)
+        return codes
+    }
+
+    private func birdTaxonomyEntries(
+        forSpeciesCodes codes: [String], cache: EBirdCache
+    ) async -> [EBirdTaxonEntry]? {
+        let taxonomyFetchedAt = try? await cache.taxonomyFetchedAt()
+        let isFresh = taxonomyFetchedAt.map { Date().timeIntervalSince($0) < Self.birdTaxonomyMaxAge } ?? false
+        if !isFresh, let taxonomy = try? await ebirdService.fetchTaxonomy() {
+            try? await cache.replaceTaxonomy(taxonomy)
+        }
+        return try? await cache.taxonomyEntries(forSpeciesCodes: codes)
+    }
+
+    private func ensureEBirdCache() async -> EBirdCache? {
+        if let ebirdCache { return ebirdCache }
+        do {
+            let databasePath = try AppSupportDirectory.url(forFileNamed: "ebird_cache.sqlite3")
+            let cache = try EBirdCache(databasePath: databasePath)
+            ebirdCache = cache
+            return cache
+        } catch {
+            return nil
+        }
+    }
+
+    /// Manual altitude re-lookup for the previewed photo's current lat/long — surfaced as a small
+    /// refresh button next to the Altitude field for the rare case the automatic USGS EPQS call
+    /// times out (mirrors the Mac app's `refreshAltitude()`). Applies to the whole capture set, the
+    /// same scope `suggestGPSIfNeeded()` used. No-op while a lookup's in flight or GPS is blank.
+    func refreshAltitude() async {
+        guard !isLookingUpAltitude, let asset = previewAsset,
+            let latitude = asset.gpsLatitude, let longitude = asset.gpsLongitude
+        else { return }
+        isLookingUpAltitude = true
+        defer { isLookingUpAltitude = false }
+        let memberIDs = selectedCaptureSet?.members.map(\.id) ?? [asset.id]
+        await lookupElevation(latitude: latitude, longitude: longitude, memberIDs: memberIDs)
+    }
+
+    /// Looks up (or reads cached) elevation for a coordinate and writes it onto every listed member's
+    /// `gpsAltitude`. Cache-first, then USGS EPQS via `ElevationLookupService`, caching the result —
+    /// same order as the Mac app's `lookupElevation`. Silent on failure (altitude just stays blank).
+    private func lookupElevation(latitude: Double, longitude: Double, memberIDs: [PhotoAsset.ID]) async {
+        guard let elevationCache = await ensureElevationCache() else { return }
+
+        let elevation: Double
+        if let cached = try? await elevationCache.cachedElevation(latitude: latitude, longitude: longitude) {
+            elevation = cached
+        } else if let looked = try? await elevationService.lookupElevation(latitude: latitude, longitude: longitude) {
+            try? await elevationCache.store(latitude: latitude, longitude: longitude, elevationMeters: looked)
+            elevation = looked
+        } else {
+            return
+        }
+        for id in memberIDs {
+            updateAsset(id) { $0.gpsAltitude = elevation }
+        }
+    }
+
+    /// This set's members as they are now rather than as the batch's snapshot of the folder had
+    /// them — a `CaptureSet` holds `PhotoAsset` values, so anything `updateAsset` changed after the
+    /// snapshot was taken is invisible to the copy the loop is carrying.
+    private func liveMembers(of captureSet: CaptureSet) -> [PhotoAsset] {
+        let currentByID = Dictionary(
+            automaticCaptureSets.flatMap(\.members).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return captureSet.members.map { currentByID[$0.id] ?? $0 }
+    }
+
+    private static func gpsCoordinate(for asset: PhotoAsset) -> GPSCoordinate? {
+        guard let latitude = asset.gpsLatitude, let longitude = asset.gpsLongitude else { return nil }
+        return GPSCoordinate(latitude: latitude, longitude: longitude, altitude: asset.gpsAltitude)
+    }
+
+    private func ensureTimelineCache() async -> TimelineLocationCache? {
+        if let timelineCache { return timelineCache }
+        do {
+            let databasePath = try AppSupportDirectory.url(forFileNamed: "timeline_location.sqlite3")
+            let cache = try TimelineLocationCache(databasePath: databasePath)
+            timelineCache = cache
+            return cache
+        } catch {
+            return nil
+        }
+    }
+
+    private func ensureElevationCache() async -> ElevationCache? {
+        if let elevationCache { return elevationCache }
+        do {
+            let databasePath = try AppSupportDirectory.url(forFileNamed: "elevation_cache.sqlite3")
+            let cache = try ElevationCache(databasePath: databasePath)
+            elevationCache = cache
+            return cache
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - AI-assisted suggestions (docs/SPEC.md §6)
+
+    /// The AI Model menu's presets, filtered from the shared `AIModelSelection.presets` to what runs
+    /// on iPad: every `openrouter:` model (pure networking) plus the one `mlx:` model small enough
+    /// for the 16GB device (FastVLM-0.5B). Drops `ollama:` (no daemon on iPad) and the 21-38GB `mlx:`
+    /// entries. Filtering the shared list rather than hard-coding a new one keeps it in sync as the
+    /// Mac list evolves. The field itself stays free-text, so anything can still be typed in.
+    var aiModelPresets: [String] {
+        AIModelSelection.presets.filter { preset in
+            if preset.hasPrefix("ollama:") { return false }
+            if preset.hasPrefix("mlx:") { return preset.contains("FastVLM") || preset.contains("gemma-3-4b") }
+            return true
+        }
+    }
+
+    /// Called from `SettingsView`'s per-model Prompt Style toggle. Persists the set.
+    func setCompactPrompt(_ useCompact: Bool, forModel model: String) {
+        if useCompact {
+            compactPromptModels.insert(model)
+        } else {
+            compactPromptModels.remove(model)
+        }
+        UserDefaults.standard.set(Array(compactPromptModels), forKey: Self.compactPromptModelsKey)
+    }
+
+    /// `" · from <file>"` when the asset sent to the AI isn't the one the preview is showing —
+    /// `AISuggestionSourcePicker` prefers the capture set's RAW while `previewAsset` is its
+    /// JPEG-first representative, so on a RAW+JPEG set the model and the user look at different
+    /// files. Empty when they agree, to keep the common single-file case's status line short.
+    private func sentFromSuffix(sourceAsset: PhotoAsset) -> String {
+        guard sourceAsset.id != previewAssetID else { return "" }
+        return " · from \(sourceAsset.url.lastPathComponent)"
+    }
+
+    /// Starts `suggestAI()` as a cancellable `Task`, stashing the handle for `cancelAISuggestion()`.
+    /// The UI ("Suggest" button) calls this rather than `suggestAI()` directly.
+    func startAISuggestion() {
+        suggestAITask = Task { await suggestAI() }
+    }
+
+    /// The "break key" for a stuck local MLX generation (docs/MLX_PROVIDER.md "No request-level
+    /// timeout") — cancels the in-flight task, which `MLXNativeProvider.chat` observes cooperatively
+    /// and unwinds from cleanly. `suggestAI()`'s `defer` still resets `isSuggestingAI` once the
+    /// cancelled task finishes unwinding, so the Suggest button re-enables promptly.
+    func cancelAISuggestion() {
+        suggestAITask?.cancel()
+    }
+
+    /// How many capture sets a batch run would cover if started right now — the button's own label.
+    /// An action that writes metadata unattended should say how many sets that is before it starts,
+    /// not report it afterwards.
+    ///
+    /// Scope is `displayedCaptureSets`, not every set loaded: on iPad the Active/Skipped picker is
+    /// what the user is looking at, and a run must not reach sets the grid is not showing.
+    var batchAITargetCount: Int {
+        BatchAISuggestionTargets.sets(
+            in: displayedCaptureSets, multiSelectedRepresentativeIDs: multiSelectedIDs,
+            redescribingDescribed: batchAIRedescribesDescribedSets
+        ).count
+    }
+
+    /// Starts `runBatchAISuggestion()` as a cancellable `Task` — the "Suggest All" button's action,
+    /// the batch counterpart to `startAISuggestion()`.
+    func startBatchAISuggestion() {
+        batchAISuggestionTask = Task { await runBatchAISuggestion() }
+    }
+
+    /// Stops a batch run. The set in flight unwinds through the same cooperative cancellation
+    /// `cancelAISuggestion()` uses, and the loop stops rather than moving to the next set.
+    func cancelBatchAISuggestion() {
+        batchAISuggestionTask?.cancel()
+    }
+
+    /// Runs one AI suggestion per capture set — the multi-selected sets if two or more are picked,
+    /// else every set the grid is showing, skipping ones that already have a description unless
+    /// `batchAIRedescribesDescribedSets` says otherwise (`BatchAISuggestionTargets`, shared with the
+    /// Mac app).
+    ///
+    /// Each set gets its own image, its own prompt and its own answer, and is staged as soon as it
+    /// comes back. That is the difference from `suggestAI()`'s multi-selection behaviour, which
+    /// sends *one* image and applies that single answer to every selected set — right for a burst
+    /// of the same subject, wrong for a card.
+    ///
+    /// One set at a time, deliberately, and more so here than on the Mac: `mlx:` and `foundation:`
+    /// are one on-device model against the iPad's jetsam ceiling, so overlapping two generations
+    /// risks the app being killed rather than finishing sooner.
+    ///
+    /// A failure on one set is logged and counted, and the run carries on: with sixty sets to get
+    /// through, one timeout must not cost the other fifty-nine.
+    func runBatchAISuggestion() async {
+        guard !isSuggestingAI, !isBatchSuggestingAI else { return }
+        guard let selection = AIModelSelection.parse(aiModelText) else {
+            aiStatusMessage =
+                "Invalid AI model — expected \"mlx:<model>\", \"openrouter:<model>\" or \"foundation:apple\""
+            return
+        }
+        guard let provider = aiProvider(for: selection.providerID) else {
+            aiStatusMessage = "Ollama isn't available on iPad — use an mlx:, openrouter: or foundation: model"
+            return
+        }
+        let targets = BatchAISuggestionTargets.sets(
+            in: displayedCaptureSets, multiSelectedRepresentativeIDs: multiSelectedIDs,
+            redescribingDescribed: batchAIRedescribesDescribedSets)
+        guard !targets.isEmpty else {
+            aiStatusMessage = "Nothing to suggest: every capture set in scope already has a description"
+            return
+        }
+
+        isBatchSuggestingAI = true
+        batchAITotalCount = targets.count
+        batchAICompletedCount = 0
+        defer { isBatchSuggestingAI = false }
+
+        var failureCount = 0
+        var firstFailureReason: String?
+        var cancelled = false
+        for captureSet in targets {
+            if Task.isCancelled {
+                cancelled = true
+                break
+            }
+            let name = captureSet.representative?.url.lastPathComponent ?? ""
+            aiStatusMessage =
+                "AI suggestions: \(batchAICompletedCount + 1) of \(batchAITotalCount) — \(name)"
+            do {
+                try await suggestAndSave(captureSet, provider: provider, selection: selection)
+            } catch is CancellationError {
+                cancelled = true
+                break
+            } catch {
+                failureCount += 1
+                if firstFailureReason == nil { firstFailureReason = error.localizedDescription }
+                Self.batchLog.error(
+                    "Batch AI failed for \(name, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+            batchAICompletedCount += 1
+        }
+
+        let suggested = batchAICompletedCount - failureCount
+        let prefix = cancelled ? "Batch cancelled after" : "Batch finished:"
+        let failures =
+            failureCount == 0
+            ? ""
+            : "; \(failureCount) failed\(firstFailureReason.map { ": \($0)" } ?? ".")"
+        aiStatusMessage = "\(prefix) \(suggested) of \(batchAITotalCount) set(s) suggested\(failures)"
+    }
+
+    /// One set of a batch run: its own source image, its own answer, staged to its own members.
+    ///
+    /// The set's existing description and keywords go out as context, the same as the edit buffer's
+    /// contents do on the previewed set. No typed hint and no manual crop reach here — there is
+    /// nobody at the screen during a batch — so subject isolation is whatever the toggle says and
+    /// the crop is `SubjectIsolationService`'s own pick, taken from the already-capped frame rather
+    /// than a second full-size decode the on-device memory ceiling would rather not see.
+    private func suggestAndSave(
+        _ captureSet: CaptureSet, provider: AIProvider, selection: AIModelSelection
+    ) async throws {
+        guard let sourceAsset = AISuggestionSourcePicker.pickSourceAsset(from: captureSet.members),
+            let representative = captureSet.representative
+        else { return }
+
+        let locationKeywords = await ensureAIContext(for: captureSet)
+        let image = try await NativeMetadataReader().extractPreviewAsync(
+            at: sourceAsset.url, maxPixelSize: Self.aiPreviewMaxPixelSize(for: selection.providerID))
+        let evaluatedImage = subjectIsolationEnabled ? (await computeSubjectCrop(in: image) ?? image) : image
+
+        let (description, keywords, _) = try await aiSuggestion(
+            representativeID: representative.id, provider: provider, selection: selection,
+            image: evaluatedImage, existingDescription: representative.descriptionText,
+            existingKeywords: representative.keywords.joined(separator: ", "), trustedKeywords: [])
+        // The model's list replaces the field wholesale, so the geocode's city/county/state keywords
+        // have to be put back deliberately — on the previewed set they survive by sitting in the edit
+        // buffer, and a batch run has no buffer to survive in.
+        let merged = MetadataEditParsing.merging(userAdded: locationKeywords, into: keywords)
+
+        // Members re-read from current state, not from the batch's folder snapshot: `ensureAIContext`
+        // may have just applied a Timeline location to them, and staging takes each file's GPS off
+        // the asset it is handed.
+        await writeMetadata(description: description, keywords: merged, to: liveMembers(of: captureSet))
+        // The panel is showing one of these sets if the user left it selected, and it would other-
+        // wise keep displaying what the sidecar said before the batch wrote over it.
+        if representative.id == selectedCaptureSet?.representative?.id {
+            editableDescription = description
+            editableKeywords = merged.joined(separator: ", ")
+            loadedKeywords = merged
+        }
+    }
+
+    /// The provider object for a parsed model string — `nil` for `ollama:`, which has no iPad
+    /// counterpart (no daemon to talk to). Was inline in `suggestAI()` until the batch run needed
+    /// the same mapping.
+    private func aiProvider(for providerID: AIProviderID) -> AIProvider? {
+        switch providerID {
+        case .mlx: return mlxProvider
+        case .openRouter: return openRouterProvider
+        case .foundation: return foundationProvider
+        case .ollama: return nil
+        }
+    }
+
+    /// Longest edge of the frame sent to a provider. On-device MLX and Foundation Models run against
+    /// the iPad's raised-but-still-bounded jetsam ceiling, and a vision encoder's feature maps scale
+    /// with pixel count, so they get half the edge (a quarter of the pixels); OpenRouter is a network
+    /// call, not memory-bound, so it keeps the full frame.
+    private static func aiPreviewMaxPixelSize(for providerID: AIProviderID) -> Int {
+        switch providerID {
+        case .mlx, .foundation: return 1024
+        case .openRouter, .ollama: return 2048
+        }
+    }
+
+    /// Called from `MetadataPanelView`'s "Crop to Subject" Toggle — see `subjectIsolationEnabled`'s
+    /// doc comment. Eagerly computes and shows the crop the moment it's switched on, rather than
+    /// waiting for a `suggestAI()` call. Mirrors the Mac app's `setSubjectIsolationEnabled`.
+    func setSubjectIsolationEnabled(_ enabled: Bool) {
+        subjectIsolationEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: Self.subjectIsolationEnabledKey)
+        if enabled {
+            recomputeSubjectCropPreview()
+        } else {
+            subjectCropTask?.cancel()
+            manualSubjectCropRect = nil
+            aiEvaluatedImage = nil
+            aiEvaluatedImageSourceName = nil
+        }
+    }
+
+    /// Called from the big preview's drag-to-crop overlay: `rect` (preview-image-pixel space) on a
+    /// drag commit, `nil` to reset back to the auto-computed crop. Mirrors the Mac app's
+    /// `setManualCropRect`.
+    func setManualCropRect(_ rect: CGRect?) {
+        manualSubjectCropRect = rect
+        recomputeSubjectCropPreview()
+    }
+
+    /// Called from a tap on the big preview while the toggle is on — picks the Vision subject under
+    /// `imagePoint` (preview-image-pixel space) as the manual crop, so a touch chooses which subject
+    /// when several are detected. The iPad's touch counterpart to the Mac's drag-only manual override;
+    /// a tap that lands on no instance leaves the current crop unchanged.
+    func pickSubjectInstance(atImagePoint imagePoint: CGPoint) {
+        guard subjectIsolationEnabled, let asset = previewAsset else { return }
+        let id = asset.id
+        subjectCropTask?.cancel()
+        subjectCropTask = Task {
+            guard let cgImage = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url)
+            else { return }
+            guard !Task.isCancelled, previewAsset?.id == id else { return }
+            let rect = await computeSubjectInstanceRect(in: cgImage, at: imagePoint)
+            guard !Task.isCancelled, previewAsset?.id == id, let rect else { return }
+            manualSubjectCropRect = rect
+            aiEvaluatedImage = cgImage.cropping(to: rect)
+            aiEvaluatedImageSourceName = asset.url.lastPathComponent
+        }
+    }
+
+    /// Shared by `setSubjectIsolationEnabled`, `setManualCropRect`, and a selection change: (re)runs
+    /// whichever crop currently applies — the manual override if one's set, otherwise
+    /// `SubjectIsolationService`'s auto-crop — against the previewed asset, publishing the result to
+    /// `aiEvaluatedImage` for the "Evaluated" preview. No-op (and clears the preview) when the toggle
+    /// is off or nothing's previewed. Mirrors the Mac app's `recomputeSubjectCropPreview`, keyed on
+    /// `previewAsset` since that (not `selectedAssetID`) is what the big preview shows on iPad.
+    private func recomputeSubjectCropPreview() {
+        subjectCropTask?.cancel()
+        guard subjectIsolationEnabled, let asset = previewAsset else {
+            aiEvaluatedImage = nil
+            aiEvaluatedImageSourceName = nil
+            return
+        }
+        let id = asset.id
+        let manualRect = manualSubjectCropRect
+        subjectCropTask = Task {
+            guard let cgImage = try? await NativeMetadataReader().extractPreviewAsync(at: asset.url)
+            else { return }
+            guard !Task.isCancelled, previewAsset?.id == id else { return }
+            let cropped: CGImage?
+            if let manualRect {
+                cropped = cgImage.cropping(to: manualRect)
+            } else {
+                cropped = await computeSubjectCrop(in: cgImage)
+            }
+            guard !Task.isCancelled, previewAsset?.id == id else { return }
+            aiEvaluatedImage = cropped
+            aiEvaluatedImageSourceName = asset.url.lastPathComponent
+        }
+    }
+
+    /// Runs `SubjectIsolationService.isolateSubject` off the main actor — a blocking synchronous
+    /// Vision request, now invoked on every toggle flip and selection change, so leaving it on
+    /// `MainActor` would jank the preview. Mirrors the Mac app's `computeSubjectCrop`.
+    private func computeSubjectCrop(in image: CGImage) async -> CGImage? {
+        await Task.detached(priority: .userInitiated) {
+            SubjectIsolationService.isolateSubject(in: image)
+        }.value
+    }
+
+    /// Off-main-actor `SubjectIsolationService.subjectInstanceRect` for the tap-to-pick path.
+    private func computeSubjectInstanceRect(in image: CGImage, at point: CGPoint) async -> CGRect? {
+        await Task.detached(priority: .userInitiated) {
+            SubjectIsolationService.subjectInstanceRect(in: image, at: point)
+        }.value
+    }
+
+    /// The AI request and the deterministic eBird enrichment that follows it, on values passed in
+    /// rather than read off the edit buffer — so `runBatchAISuggestion()` gets the same answer for a
+    /// set the user would have got pressing Suggest on it. Everything selection-shaped stays with
+    /// the caller: the manual crop, the typed keyword hint, the evaluated-image preview, the buffer.
+    ///
+    /// `trustedKeywords` are keywords already believed correct for this photo, which the enrichment
+    /// may attach a binomial to — the user's own typed hint on the previewed set, and nothing at all
+    /// in a batch run, since there is nobody there to have typed one.
+    private func aiSuggestion(
+        representativeID: PhotoAsset.ID?, provider: AIProvider, selection: AIModelSelection,
+        image: CGImage, existingDescription: String, existingKeywords: String,
+        trustedKeywords: [String]
+    ) async throws -> (description: String, keywords: [String], result: AISuggestionResult) {
+        let locationContext = representativeID.flatMap { locationContextByRepresentativeID[$0] } ?? ""
+        // Foundation Models' small context window can't hold the hundreds-of-species candidate list on
+        // top of the image; skip it (the typed `species` field + deterministic binomial lookup cover
+        // it, and the location-context line still biases toward local species). See the Mac
+        // SourceBrowserViewModel for the full rationale ("Exceeded model context window size").
+        let birdCandidateSpecies =
+            selection.providerID == .foundation || eBirdDisabledModels.contains(aiModelText)
+            ? ""
+            : representativeID.flatMap { birdCandidateSpeciesByRepresentativeID[$0] } ?? ""
+        // Foundation Models uses `@Generable` guided generation, so it takes the `.guided` prompt
+        // (no "return JSON" framing, typed species field); MLX small models take `.compact`; the
+        // rest take `.full`.
+        let promptProfile: PromptProfile =
+            selection.providerID == .foundation
+            ? .guided
+            : (compactPromptModels.contains(aiModelText) ? .compact : .full)
+
+        let result = try await aiSuggestionService.suggest(
+            provider: provider, model: selection.modelName, image: image,
+            existingDescription: existingDescription, existingKeywords: existingKeywords,
+            locationContext: locationContext, birdCandidateSpecies: birdCandidateSpecies,
+            promptProfile: promptProfile,
+            birdCandidatesAreCommonNamesOnly: true)
+        // Deterministically attach the Latin binomial the model likely omitted: if it named a bird
+        // by a common name that's in the photo's eBird region taxonomy, look up the scientific name
+        // and add it to the description (and as a keyword) — no fabrication, always correct.
+        var description = result.description
+        var keywords = result.keywords
+
+        if let scientificNames = representativeID.flatMap({ birdScientificNamesByRepresentativeID[$0] }) {
+            // Post-hoc-validate a guided provider's typed species guess against the photo's eBird
+            // region: `foundation:` is sent no candidate list (it won't fit its context window), so
+            // it guesses freely and often names an out-of-region or non-existent species. Trust it
+            // only when it's a real species in the region; a failed lookup yields "", so the
+            // description/trusted-keyword enrichment below still runs, but the bogus typed guess is
+            // neither binomial-attached nor added as a keyword. Trust the description (the model's
+            // stated ID) and the user's pre-existing keywords, never the model's freshly-generated
+            // keywords — a small model can hallucinate a candidate species into those.
+            let validatedSpecies =
+                EBirdCandidateFormatting.regionalScientificName(
+                    forSpecies: result.species, scientificNameByCommonName: scientificNames) != nil
+                ? result.species : ""
+            let enriched = EBirdCandidateFormatting.attachScientificNames(
+                description: description, keywords: keywords, trustedKeywords: trustedKeywords,
+                species: validatedSpecies, scientificNameByCommonName: scientificNames)
+            description = enriched.description
+            keywords = enriched.keywords
+            // A validated species common name (e.g. "Great Egret") isn't necessarily in the model's
+            // keywords or description, so add it as a keyword itself — its binomial was already
+            // appended by attachScientificNames above.
+            if !validatedSpecies.isEmpty,
+                !keywords.contains(where: { $0.caseInsensitiveCompare(validatedSpecies) == .orderedSame })
+            {
+                keywords.insert(validatedSpecies, at: 0)
+            }
+        }
+        return (description, keywords, result)
+    }
+
+    /// AI description/keyword suggestion for the current selection — ported from the Mac app's
+    /// `suggestAI()`, trimmed to this cut's scope: MLX + OpenRouter providers (no Ollama on iPad),
+    /// the full preview frame (no subject-isolation crop yet), and no eBird candidate list (both
+    /// deferred to step 8b). Sends the RAW-preferring representative of the selected set (or, with a
+    /// grid multi-selection, the first selected set), passes the reverse-geocoded location context
+    /// from step 7, writes the result into the edit buffer, and auto-saves — matching the Mac app and
+    /// the Python reference app (no separate accept step). Identity-guards on `previewAsset` across
+    /// every await so a selection change mid-generation discards a stale result.
+    func suggestAI() async {
+        guard !isSuggestingAI, let previewID = previewAsset?.id else { return }
+        guard let selection = AIModelSelection.parse(aiModelText) else {
+            aiStatusMessage =
+                "Invalid AI model — expected \"mlx:<model>\", \"openrouter:<model>\" or \"foundation:apple\""
+            return
+        }
+        guard let provider = aiProvider(for: selection.providerID) else {
+            aiStatusMessage = "Ollama isn't available on iPad — use an mlx:, openrouter: or foundation: model"
+            return
+        }
+
+        let targetAssets: [PhotoAsset]
+        let sourceSetMembers: [PhotoAsset]
+        let sourceRepresentativeID: PhotoAsset.ID?
+        if hasMultiSelection {
+            targetAssets = manualSelectionAssets
+            guard
+                let firstSelectedSet = captureSets.first(where: {
+                    guard let representativeID = $0.representative?.id else { return false }
+                    return multiSelectedIDs.contains(representativeID)
+                })
+            else { return }
+            sourceSetMembers = firstSelectedSet.members
+            sourceRepresentativeID = firstSelectedSet.representative?.id
+        } else {
+            guard let captureSet = selectedCaptureSet else { return }
+            targetAssets = captureSet.members
+            sourceSetMembers = captureSet.members
+            sourceRepresentativeID = captureSet.representative?.id
+        }
+        guard !targetAssets.isEmpty,
+            let sourceAsset = AISuggestionSourcePicker.pickSourceAsset(from: sourceSetMembers)
+        else { return }
+
+        isSuggestingAI = true
+        aiStatusMessage = "Generating AI suggestions…"
+        defer { isSuggestingAI = false }
+        do {
+            // On-device MLX runs against the iPad's raised-but-still-bounded jetsam ceiling (~6GB with
+            // the increased-memory-limit entitlement), and FastVLM's vision encoder holds large
+            // feature maps for a high-res image under MLX's lazy evaluation — a full 2048px frame
+            // peaks past that ceiling. Halving the longest edge to 1024 cuts the vision-encoder peak
+            // ~4x (memory scales with pixel count), keeping it well under the limit. OpenRouter is a
+            // network call, not memory-bound, so it keeps the full-resolution frame (verified working).
+            // Foundation Models runs on-device too, so it gets the same 1024px cap as MLX for the
+            // iPad's jetsam ceiling; OpenRouter (network) keeps the full frame.
+            let onDevice = selection.providerID == .mlx || selection.providerID == .foundation
+            // Subject isolation (docs/SPEC.md §6, mirrors the Mac): when on, crop to the manual
+            // override or `SubjectIsolationService`'s auto-pick before sending. The crop source is
+            // always the full 2048px decode so the manual rect — captured in that space by the preview
+            // overlay/tap — lines up regardless of provider, and the auto-crop runs at full quality; a
+            // successful crop is itself small, so it stays within the on-device memory/context ceiling
+            // without the 1024 pre-cap the uncropped on-device path needs. On a crop miss (or with the
+            // toggle off), fall back to the capped frame: 1024 for on-device to stay under the iPad
+            // jetsam limit, 2048 for the network provider.
+            let image: CGImage
+            if subjectIsolationEnabled {
+                let fullImage = try await NativeMetadataReader().extractPreviewAsync(
+                    at: sourceAsset.url, maxPixelSize: 2048)
+                let crop: CGImage?
+                if let manualRect = manualSubjectCropRect {
+                    crop = fullImage.cropping(to: manualRect)
+                } else {
+                    crop = await computeSubjectCrop(in: fullImage)
+                }
+                if let crop {
+                    image = crop
+                } else if onDevice {
+                    image = try await NativeMetadataReader().extractPreviewAsync(
+                        at: sourceAsset.url, maxPixelSize: 1024)
+                } else {
+                    image = fullImage
+                }
+            } else {
+                image = try await NativeMetadataReader().extractPreviewAsync(
+                    at: sourceAsset.url, maxPixelSize: onDevice ? 1024 : 2048)
+            }
+            guard previewAsset?.id == previewID else { return }
+            aiEvaluatedImage = image
+            aiEvaluatedImageSourceName = sourceAsset.url.lastPathComponent
+            // Captured before `editableKeywords` is overwritten below: the model's list replaces the
+            // whole field, and a keyword the user typed as a hint has to survive that. The prompt asks
+            // the model to treat existing keywords as a trusted guide, but the small on-device models
+            // this app runs routinely ignore that and drop the hint.
+            let userAddedKeywords = MetadataEditParsing.userAddedKeywords(
+                current: MetadataEditParsing.parseKeywords(editableKeywords), loaded: loadedKeywords)
+            let (description, keywords, result) = try await aiSuggestion(
+                representativeID: sourceRepresentativeID, provider: provider, selection: selection,
+                image: image, existingDescription: editableDescription,
+                existingKeywords: editableKeywords,
+                trustedKeywords: MetadataEditParsing.parseKeywords(editableKeywords))
+            guard previewAsset?.id == previewID else { return }
+            editableDescription = description
+            editableKeywords = MetadataEditParsing.merging(userAdded: userAddedKeywords, into: keywords)
+                .joined(separator: ", ")
+            // The timeout-retry fallback center-crops and re-sends, so its image — not the one
+            // decoded above — is what actually produced this result.
+            if result.timeoutRetrySucceeded, let retryImage = result.evaluatedImage {
+                aiEvaluatedImage = retryImage
+            }
+            let categorySuffix = result.sceneCategory == .other ? "" : " [\(result.sceneCategory.rawValue)]"
+            let sentFrom = sentFromSuffix(sourceAsset: sourceAsset)
+            aiStatusMessage =
+                (result.timeoutRetrySucceeded ? "Suggested (after retry)" : "Suggested")
+                + categorySuffix + sentFrom + "; saving…"
+            await performSave(scope: .manualSelection(targetAssets))
+            guard previewAsset?.id == previewID else { return }
+            aiStatusMessage = "Suggested\(categorySuffix)\(sentFrom)"
+        } catch is CancellationError {
+            aiStatusMessage = "AI suggestion cancelled"
+        } catch {
+            aiStatusMessage = "AI suggestion failed: \(error.localizedDescription)"
+        }
+    }
+}

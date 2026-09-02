@@ -7,7 +7,7 @@ shape, the palette and the sizes stay one set of numbers.
 
 That writes three files, because three things ask for the icon in three shapes:
 `icons/AppIcon-1024.png` (what `scripts/build-app-bundle.sh` sips into the
-`.icns`), `Sources/MacPhotoMaster/Resources/AppIcon.png` (the Dock icon a plain
+`.icns`), `Sources/SwiftSelect/Resources/AppIcon.png` (the Dock icon a plain
 `swift run` gets, which has no bundle and so no `CFBundleIconFile`), and the
 iPad asset catalogue's `AppIcon.png`. The first two carry their own squircle,
 padding and shadow; the iPad one is full bleed, because iOS applies the mask
