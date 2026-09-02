@@ -19,11 +19,11 @@ try Icon.writePNG(shaped, to: root.appendingPathComponent("icons/AppIcon-1024.pn
 // The Dock icon a plain `swift run` gets, which has no bundle and so no
 // Info.plist to name an .icns.
 try Icon.writePNG(shaped, to: root.appendingPathComponent(
-    "Sources/MacPhotoMaster/Resources/AppIcon.png"))
+    "Sources/SwiftSelect/Resources/AppIcon.png"))
 
 // iOS is full bleed: the system applies the mask and the shadow itself, and
 // would clip a second set of corners off one that arrived with them.
 try Icon.writePNG(bleed, to: root.appendingPathComponent(
-    "MacPhotoMasterPad/Sources/Assets.xcassets/AppIcon.appiconset/AppIcon.png"))
+    "SwiftSelectPad/Sources/Assets.xcassets/AppIcon.appiconset/AppIcon.png"))
 
 print("wrote the icon into \(root.standardizedFileURL.path)")

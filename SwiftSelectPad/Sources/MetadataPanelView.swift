@@ -1,0 +1,305 @@
+import SwiftUI
+import SwiftSelectCore
+
+/// iPad counterpart to the macOS app's `MetadataPanelView`, shown as a resizable sheet from a
+/// toolbar button (see `ContentView`) rather than a fixed inspector column — see
+/// docs/ARCHITECTURE.md's iPad file access section for why a sheet was chosen over `.inspector`'s
+/// auto-collapse.
+///
+/// Description and keywords are editable and save through `PhotoBrowserViewModel.saveMetadata`,
+/// which stages a sidecar via `SidecarStagingStore` rather than touching the original file — see
+/// docs/ARCHITECTURE.md's "iPad file access & sidecar staging" section. Three save-scope buttons
+/// mirror the Mac app's: This File (the previewed asset), Capture Set (every member of the
+/// selected grid tile's set), and Current Selection (the grid's multi-selection, when active).
+/// Title stays read-only here, same as the Mac app: it's a live rename preview computed by
+/// `PhotoBrowserViewModel.titlePreview`, never independently typed — the "Batch" field is what
+/// actually drives it (docs/SPEC.md §4's manual per-session label). Renaming itself only takes
+/// effect on the destination copy made at Process & Move time. GPS is read-only here: a location is
+/// auto-suggested from `Timeline.json` for GPS-less photos (`suggestGPSIfNeeded`, triggered by the
+/// `.task` below) and applied straight to the asset, with a manual altitude re-lookup button — but
+/// there are no editable lat/long fields, unlike the Mac app.
+///
+/// The AI Suggestions section has a model picker (free-text field + presets menu, `mlx:`/`openrouter:`/
+/// `foundation:` on iPad) and a Suggest/Cancel button driving `PhotoBrowserViewModel.startAISuggestion()`;
+/// the result auto-saves like the Mac app. Below that, a batch row runs one suggestion per capture
+/// set (`startBatchAISuggestion()`) over the grid's multi-selection or, with none, everything the
+/// grid is showing — its label carries the count because the sheet covers the grid, so neither the
+/// selection nor the number of sets in scope is visible from here. A "Crop to Subject" Toggle mirrors the Mac's — when on, the
+/// preview switches to a static crop canvas (see `PreviewPanelView`) and the model is sent the cropped
+/// subject; the resulting "Evaluated" thumbnail below confirms what it actually received. The eBird
+/// candidate list is wired up in the view model, toggled per-model in `SettingsView` rather than here.
+///
+/// Process & Move mirrors the Mac app's four-button row (Single Image/Capture Set/Current
+/// Selection/Session), calling `PhotoBrowserViewModel.process(scope:)` directly — unlike the Mac
+/// app, there's no library-folder picker here at all: `viewModel.libraryRootURL` is a fixed local
+/// staging folder inside the app's own container, not something the user chooses (see that
+/// property's doc comment for why).
+struct MetadataPanelView: View {
+    @ObservedObject var viewModel: PhotoBrowserViewModel
+
+    private var asset: PhotoAsset? { viewModel.previewAsset }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let asset, asset.isVideo {
+                    videoSummary(asset)
+                } else if let asset {
+                    Form {
+                        Section("Title & Description") {
+                            LabeledContent("Title", value: viewModel.titlePreview)
+                            TextField("Batch", text: $viewModel.sessionBatch)
+                            TextField("Description", text: $viewModel.editableDescription, axis: .vertical)
+                            TextField("Keywords (comma-separated)", text: $viewModel.editableKeywords, axis: .vertical)
+                        }
+                        Section {
+                            Button("Save (This File)") {
+                                viewModel.saveMetadata(scope: .singleAsset(asset))
+                            }
+                            .disabled(viewModel.isSavingMetadata)
+
+                            Button("Save (Capture Set)") {
+                                guard let captureSet = viewModel.selectedCaptureSet else { return }
+                                viewModel.saveMetadata(scope: .captureSet(captureSet))
+                            }
+                            .disabled(viewModel.selectedCaptureSet == nil || viewModel.isSavingMetadata)
+
+                            Button("Save (Current Selection)") {
+                                let assets = viewModel.manualSelectionAssets
+                                guard !assets.isEmpty else { return }
+                                viewModel.saveMetadata(scope: .manualSelection(assets))
+                            }
+                            .disabled(!viewModel.hasMultiSelection || viewModel.isSavingMetadata)
+
+                            if let saveStatusMessage = viewModel.saveStatusMessage {
+                                Text(saveStatusMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Section("AI Suggestions") {
+                            HStack {
+                                TextField("Model", text: $viewModel.aiModelText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                Menu {
+                                    ForEach(viewModel.aiModelPresets, id: \.self) { preset in
+                                        Button(preset) { viewModel.aiModelText = preset }
+                                    }
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                }
+                            }
+
+                            Toggle(
+                                "Crop to Subject",
+                                isOn: Binding(
+                                    get: { viewModel.subjectIsolationEnabled },
+                                    set: { viewModel.setSubjectIsolationEnabled($0) }
+                                ))
+                            if viewModel.subjectIsolationEnabled {
+                                Text("Drag a box on the preview, or tap a subject. Zoom is off.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if viewModel.manualSubjectCropRect != nil {
+                                Button("Reset to Auto Crop") {
+                                    viewModel.setManualCropRect(nil)
+                                }
+                                .font(.caption)
+                            }
+
+                            if viewModel.isSuggestingAI {
+                                Button("Cancel", role: .cancel) {
+                                    viewModel.cancelAISuggestion()
+                                }
+                            } else {
+                                Button("Suggest") {
+                                    viewModel.startAISuggestion()
+                                }
+                                .disabled(viewModel.previewAsset == nil)
+                            }
+
+                            // Batch: one suggestion per capture set. The label says both halves of
+                            // what will happen — how many sets, and whether the run is scoped to the
+                            // grid selection or to everything the grid is showing — because the sheet
+                            // covers the grid, so the selection itself is not visible from here.
+                            if viewModel.isBatchSuggestingAI {
+                                Button("Stop", role: .cancel) {
+                                    viewModel.cancelBatchAISuggestion()
+                                }
+                                ProgressView(
+                                    value: Double(viewModel.batchAICompletedCount),
+                                    total: Double(max(viewModel.batchAITotalCount, 1)))
+                            } else {
+                                Button(
+                                    (viewModel.hasMultiSelection ? "Suggest Selected Sets" : "Suggest All Sets")
+                                        + " (\(viewModel.batchAITargetCount))"
+                                ) {
+                                    viewModel.startBatchAISuggestion()
+                                }
+                                .disabled(viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI)
+                            }
+                            Toggle(
+                                "Re-describe sets that already have a description",
+                                isOn: $viewModel.batchAIRedescribesDescribedSets)
+
+                            if let aiStatusMessage = viewModel.aiStatusMessage {
+                                Text(aiStatusMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let aiEvaluatedImage = viewModel.aiEvaluatedImage {
+                                LabeledContent("Evaluated") {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Image(decorative: aiEvaluatedImage, scale: 1, orientation: .up)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(maxHeight: 160)
+                                        // Filename and pixel dimensions of what the model actually
+                                        // received. Both matter here: the file can differ from the
+                                        // previewed one (RAW vs JPEG representative), and MLX
+                                        // decodes at 1024 rather than 2048 for the jetsam ceiling.
+                                        Text(
+                                            "\(viewModel.aiEvaluatedImageSourceName ?? "—") · \(aiEvaluatedImage.width)x\(aiEvaluatedImage.height)"
+                                        )
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        Section("Camera") {
+                            LabeledContent("Camera", value: asset.cameraModel)
+                            LabeledContent("Lens", value: asset.lensModel)
+                            LabeledContent("Aperture", value: asset.aperture)
+                            LabeledContent("Shutter", value: asset.shutterSpeed)
+                            LabeledContent("Focal length", value: asset.focalLength)
+                            LabeledContent("ISO", value: asset.iso)
+                            if let capturedAt = asset.capturedAt {
+                                LabeledContent("Captured", value: capturedAt.formatted())
+                            }
+                        }
+                        if asset.gpsLatitude != nil || asset.gpsLongitude != nil
+                            || viewModel.gpsSuggestionStatusMessage != nil {
+                            Section("Location") {
+                                LabeledContent("Latitude", value: asset.gpsLatitude.map { String(format: "%.5f", $0) } ?? "—")
+                                LabeledContent("Longitude", value: asset.gpsLongitude.map { String(format: "%.5f", $0) } ?? "—")
+                                LabeledContent("Altitude") {
+                                    HStack(spacing: 8) {
+                                        Text(asset.gpsAltitude.map { String(format: "%.0f m", $0) } ?? "—")
+                                        Button {
+                                            Task { await viewModel.refreshAltitude() }
+                                        } label: {
+                                            Image(systemName: "arrow.clockwise")
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .disabled(viewModel.isLookingUpAltitude || asset.gpsLatitude == nil)
+                                    }
+                                }
+                                if let gpsMessage = viewModel.gpsSuggestionStatusMessage {
+                                    Text(gpsMessage)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        processMoveSection(asset)
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "No Photo Selected", systemImage: "photo", description: Text("Select a photo to see its metadata."))
+                }
+            }
+            .navigationTitle(asset?.url.lastPathComponent ?? "Metadata")
+            .navigationBarTitleDisplayMode(.inline)
+            // Lazy per-selection GPS + location enrichment for the previewed photo — re-runs whenever
+            // the previewed asset changes while this sheet is open. Since Process & Move is driven
+            // from this same sheet, both run before the user can act. GPS suggestion first (fills a
+            // GPS-less photo from Timeline), then reverse geocoding merges city/county/state keywords
+            // for whatever GPS the photo now has (embedded or just-suggested). Both self-guard to no-op
+            // once already applied.
+            .task(id: asset?.id) {
+                // A clip has no metadata to enrich, and no GPS field to put a fix in.
+                guard asset?.isVideo != true else { return }
+                await viewModel.suggestGPSIfNeeded()
+                await viewModel.lookupLocationKeywordsIfNeeded()
+            }
+        }
+    }
+
+    /// Everything a video can say for itself, in place of the editable form: a clip carries no
+    /// title, description, keywords or GPS to write, and nothing on the iPad could write them if it
+    /// did. Process & Move still applies — that is the whole point of showing videos here — so the
+    /// batch field comes along, since it names the folder the clip lands in (docs/SPEC.md §9).
+    @ViewBuilder
+    private func videoSummary(_ asset: PhotoAsset) -> some View {
+        Form {
+            Section("Video") {
+                LabeledContent("File", value: asset.url.lastPathComponent)
+                LabeledContent("Duration", value: VideoAssetReader.durationText(asset.videoDuration))
+                if let capturedAt = asset.capturedAt {
+                    LabeledContent("Recorded", value: capturedAt.formatted())
+                }
+                TextField("Batch", text: $viewModel.sessionBatch)
+                Text(
+                    "Videos carry no editable metadata. Process stages this clip in "
+                        + IPadVideoBundle.stagingDirectory(
+                            libraryRoot: viewModel.libraryRootURL, batch: viewModel.sessionBatch
+                        ).lastPathComponent
+                        + " for the Mac to move into ~/videotmp."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            processMoveSection(asset)
+        }
+    }
+
+    /// The Process & Move controls, shared by the still form and the video summary so the two can
+    /// never offer different scopes.
+    @ViewBuilder
+    private func processMoveSection(_ asset: PhotoAsset) -> some View {
+        Section("Process & Move") {
+            LabeledContent("Library Folder", value: viewModel.libraryRootURL.lastPathComponent)
+
+            Button("Process (This File)") {
+                viewModel.process(scope: .singleAsset(asset))
+            }
+            .disabled(viewModel.isProcessing)
+
+            Button("Process (Capture Set)") {
+                guard let captureSet = viewModel.selectedCaptureSet else { return }
+                viewModel.process(scope: .captureSet(captureSet))
+            }
+            .disabled(viewModel.selectedCaptureSet == nil || viewModel.isProcessing)
+
+            Button("Process (Current Selection)") {
+                let assets = viewModel.manualSelectionAssets
+                guard !assets.isEmpty else { return }
+                viewModel.process(scope: .manualSelection(assets))
+            }
+            .disabled(!viewModel.hasMultiSelection || viewModel.isProcessing)
+
+            Button("Process (Session)") {
+                viewModel.process(scope: .session(viewModel.captureSets))
+            }
+            .disabled(viewModel.captureSets.isEmpty || viewModel.isProcessing)
+
+            if viewModel.isProcessing {
+                ProgressView(
+                    value: Double(viewModel.processedFileCount),
+                    total: Double(max(viewModel.processTotalCount, 1)))
+            }
+            if let processStatusMessage = viewModel.processStatusMessage {
+                Text(processStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+#Preview {
+    MetadataPanelView(viewModel: PhotoBrowserViewModel())
+}

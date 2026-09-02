@@ -1,6 +1,6 @@
-# MacPhotoMaster (Swift)
+# SwiftSelect (Swift)
 
-A from-scratch Swift/SwiftUI reimplementation of [MacPhotoMaster](https://github.com/BrianSmithPhotos/phototags)
+A from-scratch Swift/SwiftUI reimplementation of [phototags](https://github.com/BrianSmithPhotos/phototags)
 (a Python/PySide6 app), taken on as a way to learn both Swift and SwiftUI. Not a port — see
 `docs/SPEC.md` for the product spec this is building toward, and `docs/ARCHITECTURE.md` for how
 code should be organized. Both are self-contained; you don't need the Python sibling repo to work
@@ -57,7 +57,7 @@ Google Drive folder for Timeline sync) tied to that signature can need re-granti
 day-to-day development.
 
 For a real, Dock-pinnable app, run `scripts/build-app-bundle.sh` — see `scripts/README.md`
-"build-app-bundle.sh" — which builds `dist/MacPhotoMaster.app` (ad-hoc signed, not notarized/
+"build-app-bundle.sh" — which builds `dist/SwiftSelect.app` (ad-hoc signed, not notarized/
 Developer ID, so it's for running on this machine, not distributing to others). It builds via
 `xcodebuild` rather than `swift build -c release`: mlx-swift-lm's Metal shaders only get compiled
 into `default.metallib` by Xcode's build system, so a plain SwiftPM release build ships without it
@@ -127,7 +127,7 @@ Past the skeleton stage — the core ingest workflow from `docs/SPEC.md` works e
   faster-path prototype for reads/previews — see its header doc for scope.
 - The Metadata pane is a `.inspector()` (not a third `NavigationSplitView` column), giving it the
   same translucent sidebar material as the Source pane plus a native collapse toggle in the toolbar.
-- `scripts/build-app-bundle.sh` packages a real, ad-hoc-signed `MacPhotoMaster.app` (custom icon,
+- `scripts/build-app-bundle.sh` packages a real, ad-hoc-signed `SwiftSelect.app` (custom icon,
   stable identity across rebuilds, built via `xcodebuild` so mlx-swift-lm's Metal shaders compile
   correctly) that can be pinned to the Dock — not a substitute for `swift run` during day-to-day
   development, just the way to get a Dock-launchable build.
@@ -138,11 +138,11 @@ Past the skeleton stage — the core ingest workflow from `docs/SPEC.md` works e
 Not yet built: a notarized/Developer ID-signed `.app` for distributing beyond this machine, and the
 deferred items noted in `CLAUDE.md` (ImageIO metadata write-back).
 
-**iPadOS target**: `Package.swift` builds a portable `MacPhotoMasterCore` library (all Services/Models
+**iPadOS target**: `Package.swift` builds a portable `SwiftSelectCore` library (all Services/Models
 except `ExifToolClient`, which needs `Process`/subprocess execution unavailable on iOS) plus the
-`MacPhotoMaster` macOS app. The iPadOS app lives outside the manifest, in its own Xcode project at
-`MacPhotoMasterPad/MacPhotoMasterPad.xcodeproj` (generated via `xcodegen` from `project.yml` in that
-directory), which depends on `MacPhotoMasterCore` as a local Swift package — a bare SwiftPM
+`SwiftSelect` macOS app. The iPadOS app lives outside the manifest, in its own Xcode project at
+`SwiftSelectPad/SwiftSelectPad.xcodeproj` (generated via `xcodegen` from `project.yml` in that
+directory), which depends on `SwiftSelectCore` as a local Swift package — a bare SwiftPM
 `executableTarget` can't produce a real, device-signable `.app` bundle for iOS, so it needed a genuine
 Xcode App target instead. See `docs/ARCHITECTURE.md` "Multi-platform target split" for the rationale
 and the access-control/API-availability gotchas hit along the way. Confirmed installing and launching

@@ -1,4 +1,4 @@
-# MacPhotoMaster (Swift) — Feature Spec
+# SwiftSelect (Swift) — Feature Spec
 
 Self-contained product spec. This describes *what* the app should do, adapted from a working
 Python/PySide6 sibling project's completed feature set — not a line-by-line port. Swift-specific
@@ -680,7 +680,7 @@ In priority order — the rest of the visualiser first.
   Group 6 remains. The groups below are the original plan; they held up in implementation, so
   they stand as written for the remaining work.
 
-  `Tests/MacPhotoMasterTests/Fixtures/CameraLookFixture.json` holds
+  `Tests/SwiftSelectTests/Fixtures/CameraLookFixture.json` holds
   154 frames shot 2026-08-07 to 2026-08-09, one per distinct maker-note signature, giving 146
   distinct look strings with every branch of the parser represented by at least one real frame.
   The longest is 111 characters, comfortably inside the 256-character IPTC IIM cap.

@@ -10,8 +10,8 @@ cd "$(dirname "$0")/.."
 # "Hardware & model notes"). Override DEVELOPER_DIR for a machine whose beta lives elsewhere.
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 
-APP_NAME="MacPhotoMaster"
-BUNDLE_ID="photos.briansmith.macphotomaster"
+APP_NAME="SwiftSelect"
+BUNDLE_ID="photos.briansmith.swiftselect"
 ICON_SOURCE="icons/AppIcon-1024.png"
 DERIVED_DATA_DIR=".build/xcodebuild-release"
 BUILD_DIR="$DERIVED_DATA_DIR/Build/Products/Release"
