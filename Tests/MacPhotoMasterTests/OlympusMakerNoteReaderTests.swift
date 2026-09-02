@@ -76,8 +76,9 @@ final class OlympusMakerNoteReaderTests: XCTestCase {
         return Array("II".utf8) + le16(42) + le32(ifd0Start) + ifd0 + ifd(entries, at: exifStart)
     }
 
-    private func writeTemporaryFile(_ bytes: Data) throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).orf")
+    private func writeTemporaryFile(_ bytes: Data, extension pathExtension: String = "orf") throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).\(pathExtension)")
         try bytes.write(to: url)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
@@ -196,6 +197,26 @@ final class OlympusMakerNoteReaderTests: XCTestCase {
 
         XCTAssertEqual(fromFile, OlympusMakerNoteReader.signals(in: bytes))
         XCTAssertEqual(fromFile?.shotNumber, 3)
+    }
+
+    /// A video is never opened, however Olympus-shaped its bytes happen to be. The same fixture that
+    /// answers in full as an `.orf` must answer nothing as a `.MOV`, which is only true if the
+    /// extension short-circuits before the read: a clip has no maker note, nothing asks for one, and
+    /// finding that out the long way costs the whole file over iPadOS's file provider.
+    func testAVideoIsSkippedWithoutBeingRead() throws {
+        let bytes = jpeg(tiffBlock(note: makerNote(cameraSettings: cameraSettings)))
+        XCTAssertEqual(
+            try OlympusMakerNoteReader.signals(at: writeTemporaryFile(bytes))?.shotNumber, 3,
+            "fixture must be readable as a still, or this proves nothing")
+
+        for pathExtension in ["mov", "MOV", "mp4"] {
+            let asVideo = try writeTemporaryFile(bytes, extension: pathExtension)
+
+            let read = OlympusMakerNoteReader.read(at: asVideo)
+
+            XCTAssertNil(read.signals, ".\(pathExtension) was parsed")
+            XCTAssertFalse(read.usedWholeFile, ".\(pathExtension) took the whole-file path")
+        }
     }
 
     /// A note sitting past the head-read cap must still be found. The head read is an optimisation,

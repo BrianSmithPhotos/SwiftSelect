@@ -46,6 +46,13 @@ public enum OlympusMakerNoteReader {
     /// fires is the difference between a folder opening at once and taking a minute. It is counted
     /// rather than assumed because assuming it got this wrong once already.
     static func read(at url: URL) -> (signals: CaptureSignals?, usedWholeFile: Bool) {
+        // A video has no maker note to find, and nothing ever asks for one: grouping reads signals
+        // for stills only (`CaptureGroupingService.groupStills`), a clip always being its own set.
+        // Left in, every clip fell straight through the head read — a QuickTime file has no TIFF
+        // header — and down the whole-file path, which through iPadOS's file provider means the
+        // entire clip crossing the cable. Half a gigabyte read to learn a `.MOV` is not an ORF.
+        if PhotoAssetLoader.isVideo(url) { return (nil, false) }
+
         if let handle = try? FileHandle(forReadingFrom: url) {
             defer { try? handle.close() }
             if let head = try? handle.read(upToCount: headLength),
