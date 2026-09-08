@@ -507,8 +507,8 @@ final class SourceBrowserViewModel: ObservableObject {
     /// manage the way there would be with two unstructured `Task { }`s.
     ///
     /// `preservingSelection` is for a reload triggered by an action on the folder already being
-    /// shown (developing a RAW, processing a derivative away) rather than by navigation: those must
-    /// not throw the user back to the first tile of a folder they were part-way through reviewing.
+    /// shown (processing a derivative away) rather than by navigation: those must not throw the
+    /// user back to the first tile of a folder they were part-way through reviewing.
     private func load(_ folderURL: URL, preservingSelection: Bool = false) {
         isLoading = true
         loadErrorMessage = nil
@@ -1839,6 +1839,7 @@ final class SourceBrowserViewModel: ObservableObject {
             // decoder the file itself offers, and the token reports whichever one that was.
             let service = RawDevelopService(dngConverter: AdobeDNGConverter())
             var failures: [String] = []
+            var developed: [PhotoAsset] = []
 
             for (index, target) in targets.enumerated() {
                 developStatusMessage =
@@ -1849,14 +1850,26 @@ final class SourceBrowserViewModel: ObservableObject {
                     try await exifTool.write(
                         title: nil, description: "", keywords: [result.token], gps: nil,
                         to: destination)
+                    developed.append(target)
                 } catch {
                     failures.append(
                         "\(target.url.lastPathComponent): \(FailureDiagnostics.describe(error))")
                 }
             }
 
-            if let folderURL {
-                load(folderURL, preservingSelection: true)
+            // Spliced in rather than reloaded: nothing on disk changed except the staged
+            // derivatives, and each one joins the capture set its original is already in (see
+            // `CaptureGroupingService.inserting`). A full `load` would re-list the folder and re-run
+            // the maker-note read over every file just to add one member per developed frame, and
+            // its `isLoading` would blank the grid on the way. Skipped if the user has navigated
+            // away meanwhile — the derivatives are on disk, so the next load of that folder finds
+            // them.
+            if breadcrumb.last == folderURL, !developed.isEmpty {
+                let derived = store.derivedAssets(forOriginals: developed)
+                automaticCaptureSets = CaptureGroupingService.inserting(
+                    derived, into: automaticCaptureSets)
+                rederiveCaptureSets()
+                refreshVariantStrip()
             }
             let successCount = targets.count - failures.count
             developStatusMessage =

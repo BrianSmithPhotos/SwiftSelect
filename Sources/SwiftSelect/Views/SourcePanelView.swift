@@ -108,6 +108,10 @@ struct SourcePanelView: View {
             }
         }
         .padding()
+        // Without this the VStack sizes to its content and the pane centres it, so the header sits
+        // mid-pane while a folder is loading and jumps to the top once the grid arrives. Claiming
+        // the full height keeps the header where it lands.
+        .frame(maxHeight: .infinity, alignment: .top)
         // .fileImporter is the SwiftUI-native folder/file picker — it wraps the same NSOpenPanel
         // you'd otherwise drive by hand from AppKit, but as a modifier tied to `isPresented`
         // rather than something you present imperatively.

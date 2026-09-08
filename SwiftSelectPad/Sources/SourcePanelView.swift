@@ -134,6 +134,12 @@ struct SourcePanelView: View {
             }
         }
         .padding()
+        // Without this the VStack sizes to its content and the pane centres it, so the breadcrumb
+        // and filter sit mid-pane while a folder is loading and jump to the top once the grid
+        // arrives. Claiming the full height keeps them where they land. (The Mac app's
+        // `SourcePanelView` needs the same thing; there it holds the "Open Folder…" button too,
+        // which here is pinned by the navigation bar.)
+        .frame(maxHeight: .infinity, alignment: .top)
         .navigationTitle("Source")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

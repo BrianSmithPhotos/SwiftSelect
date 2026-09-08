@@ -305,4 +305,51 @@ final class CaptureGroupingServiceTests: XCTestCase {
 
         XCTAssertEqual(stems(sets), [["A.jpg"], ["H1076833.mov"]])
     }
+
+    // MARK: - Splicing in derivatives
+
+    private func derivative(_ name: String, of originalName: String, capturedAt: Date) -> PhotoAsset {
+        var asset = self.asset(name, capturedAt: capturedAt)
+        asset.derivedFrom = URL(fileURLWithPath: "/tmp/\(originalName)")
+        return asset
+    }
+
+    /// The point of `inserting` is that developing a RAW needs no regroup — so the spliced result
+    /// has to be indistinguishable from the one a full reload would have produced, member order
+    /// included, across a set holding more than one frame.
+    func testSplicingDerivativesMatchesAFullRegroup() {
+        let originals = [
+            asset("A.orf", capturedAt: base),
+            asset("B.orf", capturedAt: base.addingTimeInterval(0.5)),
+        ]
+        let derived = [
+            derivative("2048_A.orf.jpg", of: "A.orf", capturedAt: base),
+            derivative("3000_B.orf.jpg", of: "B.orf", capturedAt: base.addingTimeInterval(0.5)),
+        ]
+
+        let spliced = CaptureGroupingService.inserting(derived, into: service.group(originals))
+
+        XCTAssertEqual(stems(spliced), stems(service.group(originals + derived)))
+    }
+
+    /// Skip and processed state, the merge store and every tile's thumbnail are keyed off the set's
+    /// id, so splicing must reuse it rather than build a fresh set around the new member.
+    func testSplicingKeepsTheSetIdentity() {
+        let sets = service.group([asset("A.orf", capturedAt: base)])
+        let derived = derivative("2048_A.orf.jpg", of: "A.orf", capturedAt: base)
+
+        let spliced = CaptureGroupingService.inserting([derived], into: sets)
+
+        XCTAssertEqual(spliced.map(\.id), sets.map(\.id))
+        XCTAssertEqual(spliced.first?.members.count, 2)
+    }
+
+    /// The develop runs against one folder while the user is free to navigate to another — a
+    /// derivative with no original in these sets has no frame to join and is left out.
+    func testSplicingIgnoresADerivativeWhoseOriginalIsNotPresent() {
+        let sets = service.group([asset("A.orf", capturedAt: base)])
+        let stranger = derivative("2048_Z.orf.jpg", of: "Z.orf", capturedAt: base)
+
+        XCTAssertEqual(stems(CaptureGroupingService.inserting([stranger], into: sets)), [["A.orf"]])
+    }
 }

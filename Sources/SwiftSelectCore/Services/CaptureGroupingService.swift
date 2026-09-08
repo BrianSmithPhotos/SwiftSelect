@@ -36,6 +36,43 @@ public struct CaptureGroupingService {
             + assets.filter { $0.capturedAt == nil }.map { CaptureSet(members: [$0]) }
     }
 
+    /// Splices already-staged derivatives into the sets their originals are in, without regrouping.
+    ///
+    /// A RAW develop cannot change any grouping decision: the derivative shares its original's
+    /// filename stem, so it belongs to that original's frame by definition (see `frameKey(for:)`).
+    /// That lets the browser add it to the sets it already has instead of re-reading and
+    /// re-grouping the whole folder — the difference between a blank grid that redraws and one
+    /// tile gaining a member. The intra-frame ordering is the same rule `frames(from:signals:)`
+    /// applies, so the result matches what a full reload would have produced.
+    ///
+    /// A derivative whose original isn't in `sets` is dropped: it has no frame to join here.
+    public static func inserting(_ derived: [PhotoAsset], into sets: [CaptureSet]) -> [CaptureSet] {
+        guard !derived.isEmpty else { return sets }
+        var derivedByFrame: [String: [PhotoAsset]] = [:]
+        for asset in derived { derivedByFrame[frameKey(for: asset), default: []].append(asset) }
+
+        return sets.map { set in
+            let ownKeys = set.members.map(frameKey(for:))
+            let additions = Set(ownKeys).flatMap { derivedByFrame[$0] ?? [] }
+            guard !additions.isEmpty else { return set }
+
+            // Frames keep the order they already have in this set — only the frame gaining a member
+            // is re-sorted, so an existing set is never silently reordered around the new file.
+            var frameOrder: [String] = []
+            var byKey: [String: [PhotoAsset]] = [:]
+            for (member, key) in zip(set.members, ownKeys) {
+                if byKey[key] == nil { frameOrder.append(key) }
+                byKey[key, default: []].append(member)
+            }
+            for addition in additions { byKey[frameKey(for: addition), default: []].append(addition) }
+
+            let members = frameOrder.flatMap { key in
+                byKey[key, default: []].sorted { preferenceKey($0) < preferenceKey($1) }
+            }
+            return CaptureSet(members: members, id: set.id)
+        }
+    }
+
     /// Interleaves two already-chronological lists into one. An explicit merge rather than sorting
     /// the concatenation: `Array.sort` isn't guaranteed stable, and two still sets can legitimately
     /// start in the same second (check 6 exists precisely for that), so a sort could reorder them.
