@@ -27,12 +27,18 @@ public struct RawDevelopResult: Equatable {
 /// Renders a camera RAW file to a JPEG using Apple's RAW engine, picking the newest decoder that
 /// file can actually reach. See docs/SPEC.md §5 "RAW develop".
 ///
-/// The routing exists because decoder support is per camera model, not per format. On macOS 27
-/// (`RawCamera.bundle` 9.50.0) decoder 9 lists only 69 models: an OM-3 `.orf` reports
-/// `["7", "8"]` and an X-T5 `.RAF` reports `["7", "8", "9"]`. Repackaging either as a DNG makes
-/// `"9.dng"` available, because the DNG pipeline is model-agnostic — which is what makes
-/// `.viaDNG` the general answer for an unsupported body, and what makes this need no maintenance
-/// when a camera is added to the decoder-9 list: it simply starts taking `.direct` instead.
+/// The routing exists because decoder support is per camera model, not per format. On macOS 27.2
+/// (`RawCamera.bundle` 9.51.0) an OM-3 `.orf` reports `["7", "8"]` while an X-T5 `.RAF` reports
+/// `["7", "8", "9"]` — decoder 9 is live, that body just isn't on its list. Repackaging either as
+/// a DNG makes `"9.dng"` available, because the DNG pipeline is model-agnostic — which is what
+/// makes `.viaDNG` the general answer for an unsupported body, and what makes this need no
+/// maintenance when a camera is added to the decoder-9 list: it simply starts taking `.direct`
+/// instead.
+///
+/// Don't try to state how many models decoder 9 covers — there is no enumerable list. Profiles are
+/// per-model MobileAssets fetched on demand, CoreImage holds no model list, and nothing local
+/// predicts the decoder set: a body that reaches 9 and one that doesn't carry the same `v7`/`v8`
+/// tuning blocks, and `minRawCameraVersion` runs backwards between them. Probe a file instead.
 ///
 /// Rendering is at the filter's default settings deliberately. This is not a develop UI — the point
 /// is Apple's engine applied to the file as the camera recorded it, the same thing Preview or Photos
