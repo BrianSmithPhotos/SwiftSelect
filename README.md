@@ -63,6 +63,17 @@ Developer ID, so it's for running on this machine, not distributing to others). 
 into `default.metallib` by Xcode's build system, so a plain SwiftPM release build ships without it
 and the app silently aborts (no crash report) on first MLX use.
 
+The same binary also runs headless, for the one job too large to click through —
+writing SwiftPhotoLog's model-written captions into the photographs themselves:
+
+```sh
+swift run SwiftSelect writeback --manifest ~/photo-index/writeback.jsonl \
+    --log ~/photo-index --quiet "17:00-21:30" --dry-run
+```
+
+It resumes from its own done log, and that log is what SwiftPhotoLog's `rekey`
+reads afterwards — the write changes each file's hash. See docs/SPEC.md §3.
+
 ## Status
 
 Past the skeleton stage — the core ingest workflow from `docs/SPEC.md` works end to end:

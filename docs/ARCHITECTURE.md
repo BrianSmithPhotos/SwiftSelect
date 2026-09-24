@@ -523,6 +523,33 @@ number cannot be recovered after the fact (a Dock-launched app starts at 256 and
 stack raises it — measured at 4864, source unidentified). `lsof -F f -p <pid>` gives the same count
 from outside a live process.
 
+## One bundle, two entry points
+
+`SwiftSelect` is a GUI app that also answers to a command line. `App/Main.swift`
+owns `@main`, not `SwiftSelectApp`: it parses `argv`, and hands over to
+`SwiftSelectApp.main()` when the first argument is not a verb it knows. A
+double-clicked `.app` is given arguments it never asked for (`-NSDocument...`,
+Xcode's `-ApplePersistenceIgnoreState`), so the parser returns `nil` for
+"not a command line" rather than throwing, and anything unrecognised after a
+known verb is still an error.
+
+`App/WriteBackCommand.swift` assembles the run; `Services/WriteBackRun.swift`
+walks the manifest; `Services/WriteBackLog.swift` reads it and appends the two
+logs. The decisions live in `SwiftSelectCore/Services/WriteBackPlan.swift` —
+argument parsing, the quiet-hours windows, the size-scaled timeout, which
+entries remain — because that is the part worth testing and none of it touches
+the disk. The runner stays in the macOS target for the usual reason:
+`ExifToolClient` shells out through `Process`, which the iOS sandbox forbids, so
+Core cannot depend on it (see "Multi-platform target split"). It reaches the
+runner through a one-method `WriteBackWriter` protocol instead, which is also
+what lets the tests count writes without launching anything.
+
+**A `@main` type's `static func main()` is main-actor isolated.** A plain
+`Task { }` started there inherits that isolation, so it cannot begin while the
+main thread blocks on a semaphore waiting for it: the process prints nothing,
+exits never, and looks like a hang with no output to diagnose it. `Task.detached`
+does not inherit, and is why the work is started that way.
+
 ## Local cache (Timeline GPS matching)
 
 The reference app caches an imported Google Timeline export in local SQLite for nearest-timestamp

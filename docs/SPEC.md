@@ -267,6 +267,40 @@ deterministically, and copy files into local storage.
   written during the Mac-side import (`IPadImportService`), which reads the Olympus MakerNote via
   exiftool. The camera look is a casualty of the same gap and is recovered the same way.
 
+### Headless write-back (`SwiftSelect writeback`)
+
+The same write, driven from a file instead of the UI, for a job too large to
+click through: SwiftPhotoLog's index holds 57,071 model-written captions that
+exist nowhere but the index, and the photographs they describe are on the NAS.
+
+    SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N] [--dry-run]
+
+- **The manifest is JSONL**, one photograph a line — path, hash, bytes,
+  description, keywords — emitted by `swiftphotolog writeback`. The backend
+  chooses the work and the order; this writes what it is given and decides
+  nothing.
+- **Description and keywords only.** No title, no GPS: the fields go through the
+  same `ExifToolClient` write as the UI, so the tag mapping above is the tag
+  mapping here, and there is no second copy of it to drift.
+- **Two logs, append-only.** `writeback-done.jsonl` records path, pre-write hash
+  and time, and is written only on success, so a re-run skips what landed and
+  retries what failed. `writeback-failed.jsonl` records the reason.
+  The done log is also what the backend's `rekey` reads: the write changes the
+  file's hash, and the log is the only record tying the new file to the row that
+  described it.
+- **Quiet hours** (`--quiet "17:00-21:30,..."`) pause the run between files
+  rather than mid-write, because the NAS is shared with the people living around
+  it. A window that wraps midnight is understood.
+- **The timeout scales with the file.** exiftool rewrites the whole file — copy,
+  then rename — so a write costs read plus write, twice the bytes across the
+  link, and a fixed timeout tuned on local files gives up on a 117 MB DNG over
+  Wi-Fi. `WriteBackPlan.timeoutSeconds` sizes it from the measured 19 MB/s with
+  a 3x margin and a 12 s floor.
+- **It stops on ten consecutive failures.** One unreadable file must not end a
+  run; a dead mount must not spend a night logging 50,000 of them.
+- `--dry-run` reports what it would write and touches nothing; `--limit` caps a
+  first cautious pass.
+
 ## 4. Rename
 
 - Deterministic pattern: `sequence_batch_YYYYMMDD_HHMM_[artfilter]_camera_lens.ext`.
