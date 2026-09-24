@@ -311,6 +311,17 @@ struct ExifToolClient: MetadataWriter {
             arguments.append("-IPTC:SpecialInstructions=\(String(instructions.prefix(256)))")
             arguments.append("-XMP-photoshop:Instructions=\(instructions)")
         }
+
+        // Recompute the IPTC digest, because this write always changes the legacy IIM block.
+        // Photoshop stores IPTCDigest as a checksum of that block so Adobe apps can tell whether a
+        // non-XMP-aware tool edited IIM behind XMP's back; leaving it stale makes Bridge and
+        // Photoshop offer a metadata-conflict prompt. Both halves get identical text here, so the
+        // conflict is a nuisance rather than a real disagreement - but a prompt on a file nobody
+        // edited is still wrong, and for a file carrying no digest yet this writes a correct one.
+        //
+        // This is correct on JPEG and PSD but not on TIFF, where it takes a second invocation of
+        // its own - see `reconcileTIFFDigests`.
+        arguments.append("-IPTCDigest=new")
         return arguments
     }
 
@@ -382,7 +393,9 @@ struct ExifToolClient: MetadataWriter {
 
     /// Resolved once per process: checks `PATH` first (covers `swift run`/Xcode where the
     /// launching shell's environment is inherited), then the known Homebrew locations.
-    private static let exiftoolPath: String = {
+    /// Internal rather than private so a test can invoke the same binary this client does,
+    /// instead of hardcoding a path that differs between Apple Silicon and Intel.
+    static let exiftoolPath: String = {
         if let pathVariable = ProcessInfo.processInfo.environment["PATH"] {
             for directory in pathVariable.split(separator: ":") {
                 let candidate = "\(directory)/exiftool"
@@ -542,6 +555,43 @@ struct ExifToolClient: MetadataWriter {
     /// contain no newline, but a description typed in the app could.
     private func runWrite(assignments: [String], paths: [String],
                           timeoutSeconds: Double) async throws -> Data {
+        let output = try await runAssignments(assignments: assignments, paths: paths,
+                                              timeoutSeconds: timeoutSeconds)
+        await reconcileTIFFDigests(paths: paths, timeoutSeconds: timeoutSeconds)
+        return output
+    }
+
+    /// Re-sets the IPTC digest on TIFF targets, which need a pass of their own.
+    ///
+    /// Measured on exiftool 13.55: an invocation that both changes the legacy IIM block and sets
+    /// `-IPTCDigest=new` gets the digest right on JPEG and on PSD, and wrong on TIFF - the stored
+    /// value matches neither the block before the write nor the block after it, so the file keeps
+    /// warning "IPTCDigest is not current. XMP may be out of sync" and Adobe apps keep offering a
+    /// metadata-conflict prompt. It is not our argv: plain exiftool does the same in either
+    /// argument order, with or without clearing the old digest in the same call, and on a TIFF that
+    /// carries no digest at all as well as one that does. A second, digest-only invocation
+    /// reconciles it every time, which is what this is.
+    ///
+    /// Deliberately best-effort. The caption is already written and correct by this point, and a
+    /// digest is advisory metadata about the *other* half of a write both halves of which agree -
+    /// so a failure here leaves the file exactly as it would have been without this pass, and must
+    /// not unwind a good write. `-overwrite_original` because the caller has already cleaned up its
+    /// `_original`, and a second backup would outlive the run.
+    ///
+    /// The cost is a second full rewrite, which over SMB means the bytes cross the link twice more:
+    /// 85 files and 21.7 GB of the 58,196-file write-back set, about 38 minutes of Wi-Fi.
+    private func reconcileTIFFDigests(paths: [String], timeoutSeconds: Double) async {
+        let tiffs = paths.filter {
+            let ext = ($0 as NSString).pathExtension.lowercased()
+            return ext == "tif" || ext == "tiff"
+        }
+        guard !tiffs.isEmpty else { return }
+        _ = try? await run(arguments: ["-overwrite_original", "-IPTCDigest=new"] + tiffs,
+                           timeoutSeconds: timeoutSeconds)
+    }
+
+    private func runAssignments(assignments: [String], paths: [String],
+                                timeoutSeconds: Double) async throws -> Data {
         let needsArgFile = assignments.contains { !$0.allSatisfy(\.isASCII) }
         let hasNewline = assignments.contains { $0.contains(where: \.isNewline) }
         guard needsArgFile, !hasNewline else {

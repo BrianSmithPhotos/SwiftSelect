@@ -10,7 +10,7 @@ final class ExifToolClientWriteTests: XCTestCase {
     /// A tiny 1x1 JPEG with no metadata of its own — exiftool's write path doesn't need real
     /// image content to attach IPTC/XMP/GPS tags to, and generating this in-memory keeps these
     /// tests independent of any real photo file (see CLAUDE.md "Secrets & Privacy").
-    private func writeBlankJPEG(to url: URL) throws {
+    private func writeBlankImage(to url: URL, type: UTType = .jpeg) throws {
         let pixel = CGContext(
             data: nil,
             width: 1,
@@ -25,7 +25,7 @@ final class ExifToolClientWriteTests: XCTestCase {
         let image = pixel.makeImage()!
 
         let destination = CGImageDestinationCreateWithURL(
-            url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)!
+            url as CFURL, type.identifier as CFString, 1, nil)!
         CGImageDestinationAddImage(destination, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
     }
@@ -35,7 +35,7 @@ final class ExifToolClientWriteTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent(name)
-        try writeBlankJPEG(to: url)
+        try writeBlankImage(to: url, type: url.pathExtension == "tif" ? .tiff : .jpeg)
         return url
     }
 
@@ -231,6 +231,80 @@ final class ExifToolClientWriteTests: XCTestCase {
             XCTAssertEqual((metadata["IPTC:Caption-Abstract"] as? String)?.unicodeScalars.count, 14)
             XCTAssertEqual(metadata["IPTC:Keywords"] as? [String], ["caf\u{00E9}", "city"])
         }
+    }
+
+    /// A second write must leave the IPTC digest current, not stale.
+    ///
+    /// Photoshop stores IPTCDigest as a checksum of the legacy IIM block so Adobe apps can detect a
+    /// non-XMP-aware edit. The first write here establishes a digest; the second changes the IIM
+    /// block, and without `-IPTCDigest=new` exiftool then reports "IPTCDigest is not current. XMP
+    /// may be out of sync" and Bridge offers a metadata-conflict prompt.
+    func testASecondWriteLeavesTheIPTCDigestCurrent() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+
+        try await client.write(
+            title: nil, description: "first", keywords: ["one"], gps: nil, subjectDistance: nil,
+            to: url)
+        // The stored digest lives in the Photoshop IRB, not the IPTC group; File:CurrentIPTCDigest
+        // is the freshly computed value exiftool compares it against, and is always present.
+        let first = try await client.readMetadata(at: url)
+        let firstDigest = first["Photoshop:IPTCDigest"] as? String
+        XCTAssertNotNil(firstDigest, "the write should establish a stored digest")
+        XCTAssertEqual(firstDigest, first["File:CurrentIPTCDigest"] as? String)
+
+        try await client.write(
+            title: nil, description: "second", keywords: ["two"], gps: nil, subjectDistance: nil,
+            to: url)
+        let metadata = try await client.readMetadata(at: url)
+        // A stale digest is the failure, so the digest must have moved with the text.
+        XCTAssertNotEqual(metadata["Photoshop:IPTCDigest"] as? String, firstDigest)
+        XCTAssertEqual(metadata["Photoshop:IPTCDigest"] as? String,
+                       metadata["File:CurrentIPTCDigest"] as? String)
+        XCTAssertEqual(metadata["IPTC:Caption-Abstract"] as? String, "second")
+        // And exiftool must have nothing to say about it.
+        let warnings = try await Self.warnings(for: url)
+        XCTAssertFalse(warnings.contains("IPTCDigest"), "unexpected warning: \(warnings)")
+    }
+
+    /// TIFF needs a digest pass of its own, so prove it gets one. exiftool 13.55 leaves the
+    /// stored digest disagreeing with the computed one whenever it changes IIM and sets the digest
+    /// in a single call on a TIFF - see `ExifToolClient.reconcileTIFFDigests` for the measurements.
+    /// Two writes, because a first write on a fresh file and a rewrite over existing tags are
+    /// different cases and both were observed to fail.
+    func testTIFFComesOutWithACurrentIPTCDigest() async throws {
+        let url = try makeTempFile(named: "\(UUID().uuidString).tif")
+        let client = ExifToolClient()
+
+        for (description, keyword) in [("first", "one"), ("second", "two")] {
+            try await client.write(
+                title: nil, description: description, keywords: [keyword], gps: nil,
+                subjectDistance: nil, to: url)
+            let metadata = try await client.readMetadata(at: url)
+            XCTAssertEqual(metadata["IPTC:Caption-Abstract"] as? String, description)
+            XCTAssertEqual(metadata["Photoshop:IPTCDigest"] as? String,
+                           metadata["File:CurrentIPTCDigest"] as? String,
+                           "stale digest after writing \(description)")
+            let warnings = try await Self.warnings(for: url)
+            XCTAssertFalse(warnings.contains("IPTCDigest"), "unexpected warning: \(warnings)")
+        }
+        // The reconciliation pass uses -overwrite_original, so it must leave no second backup.
+        let backup = url.appendingPathExtension("_original")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
+    }
+
+    /// exiftool's own warning channel, which `readMetadata` deliberately does not surface.
+    private static func warnings(for url: URL) async throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ExifToolClient.exiftoolPath)
+        process.arguments = ["-warning", "-a", "-s3", url.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     /// A newline in a value cannot go in a line-delimited argfile, so that write stays on argv.

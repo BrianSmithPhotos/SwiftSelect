@@ -210,6 +210,18 @@ deterministically, and copy files into local storage.
   "Soufrière" read back as "Soufrie?re". Paths stay on argv deliberately — there the decomposed form
   is the one APFS wants. A value containing a newline also stays on argv, because an argfile is
   line-delimited and a silently split argument is worse than a lost accent.
+- Every write also sets `-IPTCDigest=new`, because it always changes the legacy IIM block and
+  Photoshop stores that block's checksum so Adobe apps can tell whether a non-XMP-aware tool edited
+  IIM behind XMP's back. Left stale, Bridge and Photoshop offer a metadata-conflict prompt on a file
+  nobody edited — a nuisance rather than a real disagreement, since both halves get identical text.
+  **TIFF needs a second, digest-only invocation.** On exiftool 13.55 a single call that both changes
+  IIM and sets the digest gets it right on JPEG and PSD and wrong on TIFF, storing a value matching
+  neither the block before the write nor the block after it. Not our argv: plain exiftool does the
+  same in either argument order, with or without clearing the old digest in the same call, and on a
+  TIFF carrying no digest as well as one that does. So `reconcileTIFFDigests` runs a second pass over
+  any TIFF target, best-effort — the caption is already written by then, and a digest failure must
+  not unwind a good write. It costs a second full rewrite: 85 files and 21.7 GB of the photo index's
+  58,196-file write-back set, roughly 38 minutes of Wi-Fi.
 - Field → tag mapping (dual-write EXIF/IPTC/XMP so both older and newer metadata consumers see it):
   - Title → `IPTC:ObjectName`, `XMP-dc:Title`
   - Description → `IPTC:Caption-Abstract`, `XMP-dc:Description`,
