@@ -294,10 +294,60 @@ final class ExifToolClientWriteTests: XCTestCase {
     }
 
     /// exiftool's own warning channel, which `readMetadata` deliberately does not surface.
+    func testTextOutsideLatin1SurvivesInIPTCToo() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+        // Neither of these exists in cp1252, so before the block was declared UTF-8 the IIM half
+        // stored a literal "?" per character while XMP held them correctly. This is the whole
+        // reason for -IPTC:CodedCharacterSet=UTF8.
+        let caption = "\u{041B}\u{0415}\u{0411}\u{0415}\u{0414}\u{041A}\u{0410} and M\u{0101}ori"
+
+        try await client.write(
+            title: nil, description: caption, keywords: ["M\u{0101}ori", "\u{041B}\u{0415}\u{0411}\u{0415}\u{0414}\u{041A}\u{0410}"], gps: nil,
+            subjectDistance: nil, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["IPTC:Caption-Abstract"] as? String, caption)
+        XCTAssertEqual(metadata["IPTC:Keywords"] as? [String],
+                       ["M\u{0101}ori", "\u{041B}\u{0415}\u{0411}\u{0415}\u{0414}\u{041A}\u{0410}"])
+        XCTAssertEqual(metadata["XMP-dc:Description"] as? String, caption)
+        XCTAssertEqual(metadata["IPTC:CodedCharacterSet"] as? String, "UTF8")
+    }
+
+    func testDeclaringUTF8LeavesTheIPTCFieldsWeDoNotWriteAlone() async throws {
+        let url = try makeTempFile()
+        // Changing the declared charset makes exiftool re-encode the whole IIM block, not just the
+        // fields being assigned. That is harmless for ASCII and destructive for anything else - a
+        // pre-existing "Z\u{00FC}rich" comes back as fc under a block claiming UTF8 - so this pins the
+        // half that is safe. The index says the write-back set holds no non-ASCII here at all.
+        try await Self.exiftool([
+            "-overwrite_original", "-IPTC:City=Zurich", "-IPTC:By-line=Brian Smith",
+            "-IPTC:CopyrightNotice=(c) Brian Smith", url.path])
+
+        try await ExifToolClient().write(
+            title: nil, description: "a caption", keywords: ["one"], gps: nil,
+            subjectDistance: nil, to: url)
+
+        let metadata = try await ExifToolClient().readMetadata(at: url)
+        XCTAssertEqual(metadata["IPTC:City"] as? String, "Zurich")
+        XCTAssertEqual(metadata["IPTC:By-line"] as? String, "Brian Smith")
+        XCTAssertEqual(metadata["IPTC:CopyrightNotice"] as? String, "(c) Brian Smith")
+        // Byte-level, because a Swift string comparison would hide a re-encoding that round-trips.
+        let raw = try await Self.exiftool(["-b", "-IPTC:City", url.path])
+        XCTAssertEqual(Array(raw.utf8), Array("Zurich".utf8))
+    }
+
     private static func warnings(for url: URL) async throws -> String {
+        try await exiftool(["-warning", "-a", "-s3", url.path])
+    }
+
+    /// Runs exiftool directly, for the two things the client cannot do: seeding a fixture with
+    /// metadata the client never writes, and reading raw bytes back to check how they were encoded.
+    @discardableResult
+    private static func exiftool(_ arguments: [String]) async throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ExifToolClient.exiftoolPath)
-        process.arguments = ["-warning", "-a", "-s3", url.path]
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()

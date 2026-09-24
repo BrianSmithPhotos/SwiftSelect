@@ -206,10 +206,24 @@ deterministically, and copy files into local storage.
   with only the paths left as arguments. `Process` encodes an argument with the Darwin file-system
   representation, which is canonically *decomposed*, so a precomposed "è" arrived as "e" plus a
   combining grave: the XMP half then held a different string that looked identical, and the IPTC IIM
-  half, being cp1252 with no combining marks, stored a literal "?". Measured on a real photograph,
+  half, having no combining marks, stored a literal "?". Measured on a real photograph,
   "Soufrière" read back as "Soufrie?re". Paths stay on argv deliberately — there the decomposed form
   is the one APFS wants. A value containing a newline also stays on argv, because an argfile is
   line-delimited and a silently split argument is worse than a lost accent.
+- Every write declares the legacy IIM block UTF-8 with `-IPTC:CodedCharacterSet=UTF8`, first in the
+  argument list. exiftool otherwise encodes IIM as cp1252 and stores a literal "?" for anything
+  outside it: "ЛЕБЕДКА" became "???????" and "Māori" became "M?ori", while the XMP half - UTF-8 by
+  definition - held both correctly. IIM carries no charset unless told, so a reader is guessing
+  either way and UTF8 is the only declaration that is true. `-charset iptc=UTF8` is not a substitute
+  and changes nothing, on argv or in the argfile.
+  **The hazard is pre-existing data, not new writes.** Changing the declared charset makes exiftool
+  re-encode IIM fields the write never touches: a City already reading "Zürich" went from c3bc to
+  fc under a block now claiming UTF8, which is mojibake. Whether that matters is a property of the
+  library, so it was measured rather than assumed - across all 58,568 photographs queued for the
+  photo index's write-back, exactly two carry any other IIM text field (`By-line`,
+  `CopyrightNotice`) and both are pure ASCII, which re-encodes to itself; one file already declares
+  UTF8. A file arriving later with a non-ASCII `City`, `By-line` or `Headline` is the case to
+  re-measure before trusting this.
 - Every write also sets `-IPTCDigest=new`, because it always changes the legacy IIM block and
   Photoshop stores that block's checksum so Adobe apps can tell whether a non-XMP-aware tool edited
   IIM behind XMP's back. Left stale, Bridge and Photoshop offer a metadata-conflict prompt on a file

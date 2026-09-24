@@ -254,7 +254,21 @@ struct ExifToolClient: MetadataWriter {
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
         subjectDistance: Double?, instructions: String?
     ) -> [String] {
-        var arguments: [String] = []
+        // Declare the legacy IIM block UTF-8, first, so everything below it is stored as written.
+        // Without this exiftool encodes IIM as cp1252 and anything outside it becomes a literal "?":
+        // "ЛЕБЕДКА" came back as "???????" and "Māori" as "M?ori", while the XMP half - which is
+        // UTF-8 by definition - held both correctly. IIM carries no charset unless told, so a reader
+        // is guessing either way; saying UTF8 is the only answer that is true.
+        //
+        // The cost is real but not ours to pay. Changing the declared charset makes exiftool
+        // re-encode IIM fields this write never touches: a pre-existing City of "Zürich" went from
+        // c3bc to fc while the block now claims UTF8, which is mojibake. That is a hazard for files
+        // already holding non-ASCII in City, By-line, CopyrightNotice and the like - and the index
+        // says there are none. Across all 58,568 photographs queued for write-back, exactly two
+        // carry any of those fields at all and both are pure ASCII, which re-encodes to itself.
+        // One file already declares UTF8. So this is safe for the library it will be run against,
+        // and a file arriving later with a non-ASCII City is the case to re-measure before trusting.
+        var arguments: [String] = ["-IPTC:CodedCharacterSet=UTF8"]
         if let title {
             arguments.append("-IPTC:ObjectName=\(title)")
             arguments.append("-XMP-dc:Title=\(title)")
@@ -541,9 +555,10 @@ struct ExifToolClient: MetadataWriter {
     /// "e" followed by U+0300. Proven with `/bin/echo`: Swift holds `00E8`, the child sees
     /// `65 cc 80`, where the same text through a shell arrives as `c3 a8`. exiftool faithfully
     /// writes what it was given, so the XMP half ends up decomposed - visually identical, a
-    /// different string - and the IPTC IIM half, which is cp1252 and has no combining marks, stores
-    /// a literal "?" in place of the accent. Measured on a real write: "Soufrière" came back from
-    /// IIM as "Soufrie?re".
+    /// different string - and the IPTC IIM half, which has no combining marks, stores a literal "?"
+    /// in place of the accent. Measured on a real write: "Soufrière" came back from IIM as
+    /// "Soufrie?re". Declaring the block UTF-8 does not help here: the argument is already mangled
+    /// by the time exiftool sees it, whatever charset it is then stored in.
     ///
     /// An argfile is read as bytes, one argument a line, so nothing re-encodes the values. Paths
     /// stay on argv deliberately: there the decomposed form is what APFS wants.
