@@ -184,4 +184,66 @@ final class ExifToolClientWriteTests: XCTestCase {
             return XCTFail("expected the nonexistent file to fail")
         }
     }
+
+    /// An accented caption has to come back exactly as it went in, in both halves.
+    ///
+    /// `Process` encodes arguments with the Darwin file-system representation, which is canonically
+    /// decomposed, so a precomposed "è" reached exiftool as "e" + U+0300. The XMP half then held a
+    /// different string that looked identical, and the IPTC IIM half - cp1252, with no combining
+    /// marks - stored a literal "?". Measured on a real photograph: "Soufrière" read back as
+    /// "Soufrie?re". The fix hands the assignments over in a UTF-8 argfile instead.
+    func testAccentedTextSurvivesTheWriteInBothIPTCAndXMP() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+        // An en-dash alongside the accent: U+2013 has no decomposition and does exist in cp1252, so
+        // it survived the old path and is the control that proves the accent was the problem.
+        let caption = "A beach in Soufri\u{00E8}re with a 24\u{2013}70 mm lens"
+
+        try await client.write(
+            title: nil, description: caption, keywords: ["Soufri\u{00E8}re", "beach"], gps: nil,
+            subjectDistance: nil, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["IPTC:Caption-Abstract"] as? String, caption)
+        XCTAssertEqual(metadata["XMP-dc:Description"] as? String, caption)
+        XCTAssertEqual(metadata["XMP-iptcCore:AltTextAccessibility"] as? String, caption)
+        XCTAssertEqual(metadata["IPTC:Keywords"] as? [String], ["Soufri\u{00E8}re", "beach"])
+        // Equality alone would pass on a decomposed string in a Swift comparison, which normalises.
+        // The count is what catches it: 41 precomposed scalars, 42 decomposed.
+        XCTAssertEqual((metadata["XMP-dc:Description"] as? String)?.unicodeScalars.count, 41)
+    }
+
+    /// The batch path takes the same route, so it gets the same guarantee.
+    func testAccentedTextSurvivesABatchWrite() async throws {
+        let urls = try [makeTempFile(), makeTempFile()]
+        let client = ExifToolClient()
+        let caption = "Caf\u{00E9} in Z\u{00FC}rich"
+
+        let results = try await client.write(
+            description: caption, keywords: ["caf\u{00E9}", "city"], gps: nil, to: urls)
+
+        for url in urls {
+            guard case .success = results[url] else {
+                return XCTFail("expected the batch write to succeed")
+            }
+            let metadata = try await client.readMetadata(at: url)
+            XCTAssertEqual(metadata["IPTC:Caption-Abstract"] as? String, caption)
+            XCTAssertEqual((metadata["IPTC:Caption-Abstract"] as? String)?.unicodeScalars.count, 14)
+            XCTAssertEqual(metadata["IPTC:Keywords"] as? [String], ["caf\u{00E9}", "city"])
+        }
+    }
+
+    /// A newline in a value cannot go in a line-delimited argfile, so that write stays on argv.
+    /// Losing an accent is a smaller harm than an argument silently splitting in two.
+    func testDescriptionWithANewlineStillWrites() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+        let caption = "First line\nsecond line"
+
+        try await client.write(
+            title: nil, description: caption, keywords: [], gps: nil, subjectDistance: nil, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["XMP-dc:Description"] as? String, caption)
+    }
 }

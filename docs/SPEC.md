@@ -202,6 +202,14 @@ deterministically, and copy files into local storage.
   instead of one per file — see docs/ARCHITECTURE.md "exiftool integration". Files needing a
   unique per-file value (e.g. a rename-derived title during process/move) can't be grouped and
   stay one invocation per file.
+- Values with a non-ASCII character go to exiftool in a UTF-8 argfile (`-@ FILE`), not on argv,
+  with only the paths left as arguments. `Process` encodes an argument with the Darwin file-system
+  representation, which is canonically *decomposed*, so a precomposed "è" arrived as "e" plus a
+  combining grave: the XMP half then held a different string that looked identical, and the IPTC IIM
+  half, being cp1252 with no combining marks, stored a literal "?". Measured on a real photograph,
+  "Soufrière" read back as "Soufrie?re". Paths stay on argv deliberately — there the decomposed form
+  is the one APFS wants. A value containing a newline also stays on argv, because an argfile is
+  line-delimited and a silently split argument is worse than a lost accent.
 - Field → tag mapping (dual-write EXIF/IPTC/XMP so both older and newer metadata consumers see it):
   - Title → `IPTC:ObjectName`, `XMP-dc:Title`
   - Description → `IPTC:Caption-Abstract`, `XMP-dc:Description`,

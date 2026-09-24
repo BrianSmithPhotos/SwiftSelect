@@ -191,11 +191,12 @@ struct ExifToolClient: MetadataWriter {
         timeoutSeconds: Double, to url: URL
     ) async throws {
         try MetadataWriteFieldRules.validate(gps: gps)
-        let arguments = Self.writeArguments(
+        let assignments = Self.writeArguments(
             title: title, description: description, keywords: keywords, gps: gps,
-            subjectDistance: subjectDistance, instructions: instructions) + [url.path]
+            subjectDistance: subjectDistance, instructions: instructions)
         do {
-            _ = try await run(arguments: arguments, timeoutSeconds: timeoutSeconds)
+            _ = try await runWrite(assignments: assignments, paths: [url.path],
+                                   timeoutSeconds: timeoutSeconds)
             cleanupBackup(for: url)
         } catch {
             restoreBackupIfPresent(for: url)
@@ -217,12 +218,12 @@ struct ExifToolClient: MetadataWriter {
         try MetadataWriteFieldRules.validate(gps: gps)
         guard !urls.isEmpty else { return [:] }
 
-        let arguments = Self.writeArguments(
+        let assignments = Self.writeArguments(
             title: nil, description: description, keywords: keywords, gps: gps, subjectDistance: nil,
             instructions: nil)
-            + urls.map(\.path)
         do {
-            _ = try await run(arguments: arguments, timeoutSeconds: Self.batchTimeoutPerFile * Double(urls.count))
+            _ = try await runWrite(assignments: assignments, paths: urls.map(\.path),
+                                   timeoutSeconds: Self.batchTimeoutPerFile * Double(urls.count))
             for url in urls { cleanupBackup(for: url) }
             return Dictionary(uniqueKeysWithValues: urls.map { ($0, .success(())) })
         } catch {
@@ -519,6 +520,41 @@ struct ExifToolClient: MetadataWriter {
     /// blocks on its own `write()` into the full pipe and can never reach exit — deadlocking this
     /// call forever. `RunCompletionState` resumes the continuation once stdout, stderr, and
     /// termination have all reported in, however they interleave.
+    /// Runs a write with the `-TAG=value` assignments handed over in a UTF-8 argfile rather than
+    /// as arguments, and only the paths on argv.
+    ///
+    /// Foundation's `Process` encodes each argument with the file-system representation, which on
+    /// Darwin is canonically *decomposed*. A precomposed "è" (U+00E8) therefore reaches exiftool as
+    /// "e" followed by U+0300. Proven with `/bin/echo`: Swift holds `00E8`, the child sees
+    /// `65 cc 80`, where the same text through a shell arrives as `c3 a8`. exiftool faithfully
+    /// writes what it was given, so the XMP half ends up decomposed - visually identical, a
+    /// different string - and the IPTC IIM half, which is cp1252 and has no combining marks, stores
+    /// a literal "?" in place of the accent. Measured on a real write: "Soufrière" came back from
+    /// IIM as "Soufrie?re".
+    ///
+    /// An argfile is read as bytes, one argument a line, so nothing re-encodes the values. Paths
+    /// stay on argv deliberately: there the decomposed form is what APFS wants.
+    ///
+    /// Two cases keep the plain argv path. Assignments that are entirely ASCII cannot be changed by
+    /// the encoding, so they take the route they always took. A value containing a newline cannot
+    /// go in a line-delimited argfile at all, and losing an accent is a smaller harm than an
+    /// argument silently splitting in two - the photo index's 57,130 captions and 696,430 keywords
+    /// contain no newline, but a description typed in the app could.
+    private func runWrite(assignments: [String], paths: [String],
+                          timeoutSeconds: Double) async throws -> Data {
+        let needsArgFile = assignments.contains { !$0.allSatisfy(\.isASCII) }
+        let hasNewline = assignments.contains { $0.contains(where: \.isNewline) }
+        guard needsArgFile, !hasNewline else {
+            return try await run(arguments: assignments + paths, timeoutSeconds: timeoutSeconds)
+        }
+
+        let argFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftselect-write-\(UUID().uuidString).args")
+        try Data((assignments.joined(separator: "\n") + "\n").utf8).write(to: argFile)
+        defer { try? FileManager.default.removeItem(at: argFile) }
+        return try await run(arguments: ["-@", argFile.path] + paths, timeoutSeconds: timeoutSeconds)
+    }
+
     private func run(arguments: [String], timeoutSeconds: Double? = nil) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
