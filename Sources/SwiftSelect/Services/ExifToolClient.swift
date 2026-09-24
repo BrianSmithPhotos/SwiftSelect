@@ -172,12 +172,30 @@ struct ExifToolClient: MetadataWriter {
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
         subjectDistance: Double? = nil, instructions: String? = nil, to url: URL
     ) async throws {
+        try await write(title: title, description: description, keywords: keywords, gps: gps,
+                        subjectDistance: subjectDistance, instructions: instructions,
+                        timeoutSeconds: Self.singleFileTimeout, to: url)
+    }
+
+    /// The same write with the allowance named rather than fixed. An overload rather than a
+    /// defaulted parameter because the plain signature above is the `MetadataWriter` witness, and
+    /// Swift matches a protocol requirement on the exact signature.
+    ///
+    /// The fixed 12 s is right for a local file, where the cost is exiftool starting up. It is not
+    /// right over SMB: exiftool rewrites a file by copying it, so a full read and a full write
+    /// cross the link, and 26,033 of the photo index's 57,071 captioned files need longer than 12 s
+    /// on that arithmetic alone. See `WriteBackPlan.timeoutSeconds(bytes:)`.
+    func write(
+        title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
+        subjectDistance: Double? = nil, instructions: String? = nil,
+        timeoutSeconds: Double, to url: URL
+    ) async throws {
         try MetadataWriteFieldRules.validate(gps: gps)
         let arguments = Self.writeArguments(
             title: title, description: description, keywords: keywords, gps: gps,
             subjectDistance: subjectDistance, instructions: instructions) + [url.path]
         do {
-            _ = try await run(arguments: arguments, timeoutSeconds: Self.singleFileTimeout)
+            _ = try await run(arguments: arguments, timeoutSeconds: timeoutSeconds)
             cleanupBackup(for: url)
         } catch {
             restoreBackupIfPresent(for: url)

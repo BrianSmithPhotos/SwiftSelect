@@ -75,6 +75,14 @@ public struct QuietHours: Equatable {
 
     public let windows: [Window]
 
+    /// No restriction. The run is pointed at the NAS by default, so the quiet spec is normally
+    /// given - this is for a run against a local copy, and for tests about something else.
+    public static let none = QuietHours(windows: [])
+
+    private init(windows: [Window]) {
+        self.windows = windows
+    }
+
     /// An empty or whitespace-only spec means no restriction, matching `pacing.parse`.
     public init(_ spec: String?) throws {
         guard let spec, !spec.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -128,4 +136,87 @@ public struct QuietHours: Equatable {
 public enum QuietHoursError: Error, Equatable {
     case notAWindow(String)
     case notATime(String)
+}
+
+/// The headless run's arguments. Parsing is here rather than in the entry point so the rules are
+/// testable without launching anything: an entry point that has already decided to run headless
+/// cannot then be asked what it would have decided.
+public struct WriteBackOptions: Equatable {
+    /// argv[1] that means "do not open a window".
+    public static let verb = "writeback"
+
+    public let manifest: String
+    /// Where the done and failed logs go. The done log is the evidence the index re-keys vectors
+    /// from, so it is an argument, not a temporary file.
+    public let logDirectory: String
+    public let quiet: String?
+    public let dryRun: Bool
+    public let limit: Int?
+
+    public init(manifest: String, logDirectory: String, quiet: String? = nil,
+                dryRun: Bool = false, limit: Int? = nil) {
+        self.manifest = manifest
+        self.logDirectory = logDirectory
+        self.quiet = quiet
+        self.dryRun = dryRun
+        self.limit = limit
+    }
+
+    /// nil when this is an ordinary launch - a double-clicked .app gets argv it never asked for,
+    /// so anything that is not the verb has to mean "open the window" rather than "bad arguments".
+    public static func parse(arguments: [String]) throws -> WriteBackOptions? {
+        guard arguments.count > 1, arguments[1] == verb else { return nil }
+
+        var values: [String: String] = [:]
+        var dryRun = false
+        var index = 2
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--dry-run":
+                dryRun = true
+                index += 1
+            case "--manifest", "--log", "--quiet", "--limit":
+                guard index + 1 < arguments.count else {
+                    throw WriteBackOptionsError.missingValue(argument)
+                }
+                values[argument] = arguments[index + 1]
+                index += 2
+            default:
+                throw WriteBackOptionsError.unknownArgument(argument)
+            }
+        }
+
+        guard let manifest = values["--manifest"] else {
+            throw WriteBackOptionsError.missingValue("--manifest")
+        }
+        guard let log = values["--log"] else {
+            throw WriteBackOptionsError.missingValue("--log")
+        }
+        var limit: Int?
+        if let text = values["--limit"] {
+            guard let value = Int(text), value > 0 else {
+                throw WriteBackOptionsError.notACount(text)
+            }
+            limit = value
+        }
+        return WriteBackOptions(manifest: manifest, logDirectory: log,
+                                quiet: values["--quiet"], dryRun: dryRun, limit: limit)
+    }
+
+    public static let usage = """
+        usage: SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N] [--dry-run]
+
+          --manifest  the JSONL from `swiftphotolog writeback`
+          --log       directory for writeback-done.jsonl and writeback-failed.jsonl
+          --quiet     windows to stay off the NAS in, e.g. 07:00-08:30,17:00-21:30
+          --limit     stop after N photographs, for a first run against a few
+          --dry-run   say what would be written and write nothing
+        """
+}
+
+public enum WriteBackOptionsError: Error, Equatable {
+    case missingValue(String)
+    case unknownArgument(String)
+    case notACount(String)
 }

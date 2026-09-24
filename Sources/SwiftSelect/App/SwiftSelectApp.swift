@@ -26,7 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-@main
+// `@main` lives in `Main.swift`, which chooses between this app and the headless
+// write-back run before SwiftUI is touched.
 struct SwiftSelectApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
