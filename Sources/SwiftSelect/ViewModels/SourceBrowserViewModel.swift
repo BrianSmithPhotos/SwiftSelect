@@ -251,6 +251,7 @@ final class SourceBrowserViewModel: ObservableObject {
     private let ebirdService = EBirdSpeciesListService()
     private let ollamaProvider: AIProvider = OllamaProvider()
     private let openRouterProvider: AIProvider = OpenRouterProvider()
+    private let googleProvider: AIProvider = GoogleProvider()
     private let mlxProvider: AIProvider = MLXNativeProvider()
     private let foundationProvider: AIProvider = FoundationModelsProvider()
     private let aiSuggestionService = AISuggestionService()
@@ -1451,7 +1452,7 @@ final class SourceBrowserViewModel: ObservableObject {
         guard !isSuggestingAI, let id = selectedAssetID else { return }
         guard let selection = AIModelSelection.parse(aiModelText) else {
             aiStatusMessage =
-                "Invalid AI model — expected \"ollama:<model>\", \"openrouter:<model>\", \"mlx:<model>\", or \"foundation:apple\""
+                "Invalid AI model — expected \"ollama:<model>\", \"openrouter:<model>\", \"google:<model>\", \"mlx:<model>\", or \"foundation:apple\""
             return
         }
         let provider = aiProvider(for: selection.providerID)
@@ -1613,7 +1614,7 @@ final class SourceBrowserViewModel: ObservableObject {
         guard !isSuggestingAI, !isBatchSuggestingAI else { return }
         guard let selection = AIModelSelection.parse(aiModelText) else {
             aiStatusMessage =
-                "Invalid AI model — expected \"ollama:<model>\", \"openrouter:<model>\", \"mlx:<model>\", or \"foundation:apple\""
+                "Invalid AI model — expected \"ollama:<model>\", \"openrouter:<model>\", \"google:<model>\", \"mlx:<model>\", or \"foundation:apple\""
             return
         }
         let provider = aiProvider(for: selection.providerID)
@@ -1712,6 +1713,7 @@ final class SourceBrowserViewModel: ObservableObject {
         switch providerID {
         case .ollama: return ollamaProvider
         case .openRouter: return openRouterProvider
+        case .google: return googleProvider
         case .mlx: return mlxProvider
         case .foundation: return foundationProvider
         }

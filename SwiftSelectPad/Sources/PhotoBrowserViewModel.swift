@@ -277,6 +277,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     private let elevationService = ElevationLookupService()
     private let reverseGeocodeService = ReverseGeocodeService()
     private let openRouterProvider: AIProvider = OpenRouterProvider()
+    private let googleProvider: AIProvider = GoogleProvider()
     private let mlxProvider: AIProvider = MLXNativeProvider()
     private let foundationProvider: AIProvider = FoundationModelsProvider()
     private let aiSuggestionService = AISuggestionService()
@@ -1773,7 +1774,7 @@ final class PhotoBrowserViewModel: ObservableObject {
         guard !isSuggestingAI, !isBatchSuggestingAI else { return }
         guard let selection = AIModelSelection.parse(aiModelText) else {
             aiStatusMessage =
-                "Invalid AI model — expected \"mlx:<model>\", \"openrouter:<model>\" or \"foundation:apple\""
+                "Invalid AI model — expected \"mlx:<model>\", \"openrouter:<model>\", \"google:<model>\" or \"foundation:apple\""
             return
         }
         guard let provider = aiProvider(for: selection.providerID) else {
@@ -1876,6 +1877,7 @@ final class PhotoBrowserViewModel: ObservableObject {
         switch providerID {
         case .mlx: return mlxProvider
         case .openRouter: return openRouterProvider
+        case .google: return googleProvider
         case .foundation: return foundationProvider
         case .ollama: return nil
         }
@@ -1884,11 +1886,11 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// Longest edge of the frame sent to a provider. On-device MLX and Foundation Models run against
     /// the iPad's raised-but-still-bounded jetsam ceiling, and a vision encoder's feature maps scale
     /// with pixel count, so they get half the edge (a quarter of the pixels); OpenRouter is a network
-    /// call, not memory-bound, so it keeps the full frame.
+    /// call (as is Google), not memory-bound, so it keeps the full frame.
     private static func aiPreviewMaxPixelSize(for providerID: AIProviderID) -> Int {
         switch providerID {
         case .mlx, .foundation: return 1024
-        case .openRouter, .ollama: return 2048
+        case .openRouter, .google, .ollama: return 2048
         }
     }
 
@@ -2067,7 +2069,7 @@ final class PhotoBrowserViewModel: ObservableObject {
         guard !isSuggestingAI, let previewID = previewAsset?.id else { return }
         guard let selection = AIModelSelection.parse(aiModelText) else {
             aiStatusMessage =
-                "Invalid AI model — expected \"mlx:<model>\", \"openrouter:<model>\" or \"foundation:apple\""
+                "Invalid AI model — expected \"mlx:<model>\", \"openrouter:<model>\", \"google:<model>\" or \"foundation:apple\""
             return
         }
         guard let provider = aiProvider(for: selection.providerID) else {

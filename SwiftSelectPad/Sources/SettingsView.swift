@@ -20,6 +20,7 @@ struct SettingsView: View {
     /// `.onAppear` and written straight back to the Keychain on change — never persisted anywhere
     /// else (a `UserDefaults` secret would be a cleartext plist). See `APIKeyStore`.
     @State private var openRouterAPIKey = ""
+    @State private var geminiAPIKey = ""
     @State private var eBirdAPIKey = ""
     @State private var isConfirmingClearStagedEdits = false
 
@@ -62,6 +63,12 @@ struct SettingsView: View {
                         .onChange(of: openRouterAPIKey) { _, newValue in
                             APIKeyStore.save(newValue, account: "OPENROUTER_API_KEY")
                         }
+                    SecureField("Gemini API key", text: $geminiAPIKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: geminiAPIKey) { _, newValue in
+                            APIKeyStore.save(newValue, account: "GEMINI_API_KEY")
+                        }
                     SecureField("eBird API key", text: $eBirdAPIKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -73,7 +80,8 @@ struct SettingsView: View {
                 } footer: {
                     Text(
                         "OpenRouter: needed for openrouter: models (on-device mlx: models need none). "
-                        + "eBird: enables the local-species candidate list that improves bird ID. Both "
+                        + "Gemini: needed for google: models. "
+                        + "eBird: enables the local-species candidate list that improves bird ID. All "
                         + "stored securely in the device Keychain.")
                 }
 
@@ -155,6 +163,7 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 openRouterAPIKey = APIKeyStore.read(account: "OPENROUTER_API_KEY") ?? ""
+                geminiAPIKey = APIKeyStore.read(account: "GEMINI_API_KEY") ?? ""
                 eBirdAPIKey = APIKeyStore.read(account: "EBIRD_API_KEY") ?? ""
                 viewModel.refreshStagedEditCount()
             }

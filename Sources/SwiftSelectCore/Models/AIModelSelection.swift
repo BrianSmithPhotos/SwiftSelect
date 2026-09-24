@@ -4,6 +4,8 @@ import Foundation
 public enum AIProviderID: String {
     case ollama
     case openRouter = "openrouter"
+    /// The Gemini API called directly with the user's own key — see `GoogleProvider`.
+    case google
     case mlx
     /// Apple's on-device Foundation Models with `@Generable` guided generation — one system model,
     /// so the model-name segment is nominal (`foundation:apple`). macOS/iOS 26 for text, but image
@@ -35,6 +37,8 @@ public struct AIModelSelection {
         "ollama:qwen3.8:27b-mlx",
         "mlx:mlx-community/gemma-4-31b-it-8bit",
         "foundation:apple",
+        "google:gemini-3.1-flash-lite",
+        "google:gemini-3.5-flash-lite",
         "openrouter:google/gemini-3.1-flash-lite-image",
         "openrouter:google/gemini-2.5-flash",
         "openrouter:openai/gpt-5.1",

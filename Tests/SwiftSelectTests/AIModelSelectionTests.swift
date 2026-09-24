@@ -16,6 +16,12 @@ final class AIModelSelectionTests: XCTestCase {
         XCTAssertEqual(selection?.modelName, "google/gemini-2.5-flash")
     }
 
+    func testParsesGoogleModel() {
+        let selection = AIModelSelection.parse("google:gemini-3.5-flash-lite")
+        XCTAssertEqual(selection?.providerID, .google)
+        XCTAssertEqual(selection?.modelName, "gemini-3.5-flash-lite")
+    }
+
     func testTrimsWhitespace() {
         let selection = AIModelSelection.parse("  ollama:qwen3.6:35b  ")
         XCTAssertEqual(selection?.providerID, .ollama)

@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var isChoosingFolder = false
     @State private var eBirdAPIKey = ""
     @State private var openRouterAPIKey = ""
+    @State private var geminiAPIKey = ""
 
     /// Only OpenRouter presets get a toggle here — Ollama/MLX always send the candidate list (it's
     /// free, local compute), see `SourceBrowserViewModel.eBirdDisabledModels`'s doc comment.
@@ -60,6 +61,9 @@ struct SettingsView: View {
                 apiKeyRow(
                     title: "OpenRouter", envVar: "OPENROUTER_API_KEY", account: "OPENROUTER_API_KEY",
                     value: $openRouterAPIKey)
+                apiKeyRow(
+                    title: "Google Gemini", envVar: "GEMINI_API_KEY", account: "GEMINI_API_KEY",
+                    value: $geminiAPIKey)
             }
         }
         .padding()
@@ -72,6 +76,7 @@ struct SettingsView: View {
         .task {
             eBirdAPIKey = APIKeyStore.read(account: "EBIRD_API_KEY") ?? ""
             openRouterAPIKey = APIKeyStore.read(account: "OPENROUTER_API_KEY") ?? ""
+            geminiAPIKey = APIKeyStore.read(account: "GEMINI_API_KEY") ?? ""
         }
     }
 
