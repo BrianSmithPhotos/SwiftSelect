@@ -4,12 +4,23 @@ import SwiftSelectCore
 /// The one entry point, choosing between the app and the headless write-back run.
 ///
 /// `SwiftSelectApp` no longer carries `@main` itself: a target has exactly one entry point, and
-/// this one has to decide before any of SwiftUI is touched. Anything that is not the `writeback`
-/// verb opens the window as before, because a double-clicked .app is handed argv it never asked for
-/// and must not be able to fail on it.
+/// this one has to decide before any of SwiftUI is touched. Anything that is not the `writeback` or
+/// `evict` verb opens the window as before, because a double-clicked .app is handed argv it never
+/// asked for and must not be able to fail on it.
 @main
 struct Main {
     static func main() {
+        // The eviction verb first, and it is synchronous: handing bytes back is a resource read and
+        // a call per file, with nothing to await.
+        do {
+            if let evicting = try EvictOptions.parse(arguments: CommandLine.arguments) {
+                exit(EvictCommand.run(evicting))
+            }
+        } catch {
+            WriteBackCommand.complain("\(error)\n\n\(EvictOptions.usage)")
+            exit(2)
+        }
+
         let options: WriteBackOptions?
         do {
             options = try WriteBackOptions.parse(arguments: CommandLine.arguments)

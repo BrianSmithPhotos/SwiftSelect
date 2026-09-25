@@ -683,6 +683,25 @@ final class WriteBackRunTests: XCTestCase {
         XCTAssertNotNil(outcome.refusal)
     }
 
+    func testKeepLocalHandsNothingBackAtAll() async throws {
+        // The batched workflow: the index chain has to read these files, and `hash` skips an evicted
+        // one as dataless. Measured - 24 files cost 0.65 s to hash while local and 51.9 s after.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.keepLocal = true
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        subject.uploaded = { _ in XCTFail("asked about an upload on a keep-local run"); return false }
+        subject.evict = { XCTFail("gave back \($0) on a keep-local run") }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg"), entry("/icloud/b.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 2)
+        XCTAssertEqual(outcome.fetched, 2)
+        XCTAssertEqual(outcome.evicted, 0)
+        // Not counted as left behind either: nothing was promised and nothing went wrong.
+        XCTAssertEqual(outcome.stillLocal, 0)
+    }
+
     // MARK: - helpers
 
     private func run(writer: WriteBackWriter, quiet: QuietHours = .none,

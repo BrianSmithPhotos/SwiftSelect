@@ -90,6 +90,11 @@ struct WriteBackRun {
     /// it. This exists for the wired run, and turning it up on Wi-Fi buys almost nothing.
     var workers = 1
 
+    /// Keep the bytes of woken placeholders rather than giving them back as the run goes. The
+    /// batched iCloud workflow needs them: `hash` skips an evicted file as dataless, so the index
+    /// cannot learn the new hash of a file whose bytes have already gone. See `WriteBackOptions`.
+    var keepLocal = false
+
     var now: () -> Date = Date.init
     var pause: (Int) async -> Void = { seconds in
         try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
@@ -158,7 +163,7 @@ struct WriteBackRun {
                         outcome.fetchSeconds += fetchSeconds
                         // Only what this run woke is put back to sleep. A file whose bytes were
                         // already here was somebody else's decision, and stays as it was found.
-                        awaitingUpload.append((entry.path, now()))
+                        if !keepLocal { awaitingUpload.append((entry.path, now())) }
                     }
                     consecutiveTrouble = 0
                 case let .failed(entry, reason):

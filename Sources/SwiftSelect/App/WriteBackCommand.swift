@@ -44,6 +44,10 @@ enum WriteBackCommand {
         if let limit = options.limit { say("stopping after \(limit), as asked") }
         if options.workers > 1 { say("\(options.workers) photographs in flight at once") }
         if !quiet.windows.isEmpty { say("quiet hours: \(options.quiet ?? "")") }
+        if options.keepLocal {
+            say("keeping the bytes of anything woken, as asked - evict the batch once "
+                + "scan, hash, rekey and exif have been past it")
+        }
         if options.dryRun { say("dry run: nothing will be written") }
         guard !todo.isEmpty else {
             say("nothing to do")
@@ -51,7 +55,7 @@ enum WriteBackCommand {
         }
 
         let run = WriteBackRun(writer: ExifToolClient(), quiet: quiet, dryRun: options.dryRun,
-                               workers: options.workers)
+                               workers: options.workers, keepLocal: options.keepLocal)
         let outcome = await run.run(entries: todo, log: log, limit: options.limit)
 
         say("")
@@ -69,9 +73,12 @@ enum WriteBackCommand {
                        outcome.fetched, outcome.fetchSeconds, each))
             // The point of the line is the disk, not the tidiness: 62,675 woken placeholders held
             // locally would be about 926 GB against 1.1 TiB free.
-            say("\(outcome.evicted) of them gave their bytes back once the provider had the rewrite"
-                + (outcome.stillLocal > 0
-                   ? ", \(outcome.stillLocal) are still taking up room" : ""))
+            if !options.keepLocal {
+                say("\(outcome.evicted) of them gave their bytes back once the provider had "
+                    + "the rewrite"
+                    + (outcome.stillLocal > 0
+                       ? ", \(outcome.stillLocal) are still taking up room" : ""))
+            }
             // Said out loud rather than counted: a swallowed refusal once made an eviction step that
             // gave nothing back at all look like one that worked.
             if let refusal = outcome.refusal, outcome.stillLocal > 0 {

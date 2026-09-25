@@ -175,15 +175,25 @@ public struct WriteBackOptions: Equatable {
     /// Photographs in flight at once. One unless asked, because on Wi-Fi lanes buy 13% and on a
     /// wire they buy about half the run - see `WriteBackRun.workers`.
     public let workers: Int
+    /// Keep the bytes of woken placeholders instead of giving them back as the run goes.
+    ///
+    /// For the batched iCloud workflow, where the index chain runs over each batch before it is
+    /// evicted. Measured: `hash` skips an evicted file as dataless, so giving the bytes back per
+    /// file means fetching all of them again - 24 files took 0.65 s to hash while local and 51.9 s
+    /// after eviction, single-threaded where the write-back has eight lanes. The batch script
+    /// evicts afterwards instead.
+    public let keepLocal: Bool
 
     public init(manifest: String, logDirectory: String, quiet: String? = nil,
-                dryRun: Bool = false, limit: Int? = nil, workers: Int = 1) {
+                dryRun: Bool = false, limit: Int? = nil, workers: Int = 1,
+                keepLocal: Bool = false) {
         self.manifest = manifest
         self.logDirectory = logDirectory
         self.quiet = quiet
         self.dryRun = dryRun
         self.limit = limit
         self.workers = workers
+        self.keepLocal = keepLocal
     }
 
     /// nil when this is an ordinary launch - a double-clicked .app gets argv it never asked for,
@@ -193,12 +203,16 @@ public struct WriteBackOptions: Equatable {
 
         var values: [String: String] = [:]
         var dryRun = false
+        var keepLocal = false
         var index = 2
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
             case "--dry-run":
                 dryRun = true
+                index += 1
+            case "--keep-local":
+                keepLocal = true
                 index += 1
             case "--manifest", "--log", "--quiet", "--limit", "--workers":
                 guard index + 1 < arguments.count else {
@@ -233,12 +247,12 @@ public struct WriteBackOptions: Equatable {
         }
         return WriteBackOptions(manifest: manifest, logDirectory: log,
                                 quiet: values["--quiet"], dryRun: dryRun, limit: limit,
-                                workers: workers)
+                                workers: workers, keepLocal: keepLocal)
     }
 
     public static let usage = """
         usage: SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N]
-                                    [--workers N] [--dry-run]
+                                    [--workers N] [--keep-local] [--dry-run]
 
           --manifest  the JSONL from `swiftphotolog writeback`
           --log       directory for writeback-done.jsonl and writeback-failed.jsonl
@@ -246,7 +260,64 @@ public struct WriteBackOptions: Equatable {
           --limit     stop after N photographs, for a first run against a few
           --workers   photographs in flight at once, default 1. Worth turning up on a wired
                       link and not on Wi-Fi, where the link is the wall
+          --keep-local  keep the bytes of woken cloud placeholders instead of giving them
+                        back as the run goes, for a batch the index chain has yet to see
           --dry-run   say what would be written and write nothing
+        """
+}
+
+/// The arguments of `SwiftSelect evict`, which hands back the local bytes of a batch the index chain
+/// has already read. Parsed here beside the write-back's own for the same reason: the rules are
+/// testable without launching anything.
+public struct EvictOptions: Equatable {
+    public static let verb = "evict"
+
+    /// The same manifest the write-back was given. The paths are unchanged by a write - exiftool
+    /// rewrites a file in place - so the batch that was written is the batch to hand back.
+    public let manifest: String
+    public let dryRun: Bool
+
+    public init(manifest: String, dryRun: Bool = false) {
+        self.manifest = manifest
+        self.dryRun = dryRun
+    }
+
+    /// nil when argv[1] is not the verb, so a double-clicked .app still opens its window.
+    public static func parse(arguments: [String]) throws -> EvictOptions? {
+        guard arguments.count > 1, arguments[1] == verb else { return nil }
+
+        var manifest: String?
+        var dryRun = false
+        var index = 2
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--dry-run":
+                dryRun = true
+                index += 1
+            case "--manifest":
+                guard index + 1 < arguments.count else {
+                    throw WriteBackOptionsError.missingValue("--manifest")
+                }
+                manifest = arguments[index + 1]
+                index += 2
+            default:
+                throw WriteBackOptionsError.unknownArgument(arguments[index])
+            }
+        }
+        guard let manifest else { throw WriteBackOptionsError.missingValue("--manifest") }
+        return EvictOptions(manifest: manifest, dryRun: dryRun)
+    }
+
+    public static let usage = """
+        usage: SwiftSelect evict --manifest FILE [--dry-run]
+
+        Hands back the local bytes of cloud placeholders this batch woke, once the index has
+        read them. Only files a provider already holds, and never a file outside a provider,
+        so it cannot reach the NAS. Not a delete: the file keeps its name, its size and its
+        metadata, and asking for it again brings the same bytes back.
+
+          --manifest  the same JSONL the write-back was given
+          --dry-run   say what would be handed back and hand back nothing
         """
 }
 

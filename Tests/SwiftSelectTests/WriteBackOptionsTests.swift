@@ -89,4 +89,13 @@ final class WriteBackOptionsTests: XCTestCase {
             ]), "accepted \(bad)")
         }
     }
+    func testTheBytesAreGivenBackUnlessKeepLocalIsAsked() throws {
+        let ordinary = try WriteBackOptions.parse(
+            arguments: ["SwiftSelect", "writeback", "--manifest", "m", "--log", "l"])
+        XCTAssertEqual(ordinary?.keepLocal, false)
+        let batched = try WriteBackOptions.parse(
+            arguments: ["SwiftSelect", "writeback", "--manifest", "m", "--log", "l",
+                        "--keep-local"])
+        XCTAssertEqual(batched?.keepLocal, true)
+    }
 }
