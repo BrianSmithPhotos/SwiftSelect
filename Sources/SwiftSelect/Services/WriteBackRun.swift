@@ -32,6 +32,10 @@ struct WriteBackRun {
         var written = 0
         var failed = 0
         var missing = 0
+        /// Placeholders this run had to ask a cloud provider for, and the seconds spent waiting.
+        /// Reported because a fetch is 20 s against exiftool's 0.5 and would otherwise be invisible.
+        var fetched = 0
+        var fetchSeconds = 0.0
         /// Why the run stopped early, or nil if it reached the end of the list.
         var stopped: String?
     }
@@ -65,6 +69,14 @@ struct WriteBackRun {
         try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
     }
     var exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    /// Whether this path's bytes are on the machine, and the ask that brings them here. Injected as
+    /// a pair so a test can be a cloud provider without one, and so the run itself needs no notion
+    /// of which provider a path belongs to - `CloudFile` answers `.notCloud` for the NAS and every
+    /// local disk, which is what keeps 4,645 GB of originals out of this path entirely.
+    var presence: (String) -> CloudFile.Presence = { CloudFile.presence(at: URL(fileURLWithPath: $0)) }
+    var fetch: (String, Double) async throws -> Double = { path, timeout in
+        try await CloudFile.fetch(at: URL(fileURLWithPath: path), timeoutSeconds: timeout)
+    }
     /// Flushed on every line: block buffering makes a four-hour quiet-hours pause look exactly
     /// like a stalled run, which has cost a session before.
     var say: (String) -> Void = { line in
@@ -76,7 +88,7 @@ struct WriteBackRun {
     /// log line is written by the consuming loop in `run`, which is one task, so the two logs stay
     /// append-ordered and `WriteBackLog` needs no lock of its own.
     private enum Attempt {
-        case wrote(WriteBackEntry)
+        case wrote(WriteBackEntry, fetchSeconds: Double?)
         case failed(WriteBackEntry, String)
         case notThere(WriteBackEntry)
     }
@@ -102,11 +114,15 @@ struct WriteBackRun {
             while let result = await group.next() {
                 completed += 1
                 switch result {
-                case let .wrote(entry):
+                case let .wrote(entry, fetchSeconds):
                     // Logged only on success, and by this loop alone: the log is both the resume
                     // point and the record the index re-keys each photograph's vector from.
                     if !dryRun { log.done(entry, at: now()) }
                     outcome.written += 1
+                    if let fetchSeconds {
+                        outcome.fetched += 1
+                        outcome.fetchSeconds += fetchSeconds
+                    }
                     consecutiveTrouble = 0
                 case let .failed(entry, reason):
                     outcome.failed += 1
@@ -149,14 +165,22 @@ struct WriteBackRun {
 
     private func attempt(_ entry: WriteBackEntry) async -> Attempt {
         guard exists(entry.path) else { return .notThere(entry) }
-        guard !dryRun else { return .wrote(entry) }
+        guard !dryRun else { return .wrote(entry, fetchSeconds: nil) }
+        var waited: Double?
         do {
+            // An evicted placeholder is woken before exiftool is started, not during it. exiftool
+            // opening one would block inside a timeout sized for reading bytes off a disk, and a
+            // small file's allowance is 12 s where the fetch alone measured 12.8 to 26.8.
+            if presence(entry.path) == .evicted {
+                waited = try await fetch(entry.path,
+                                         WriteBackPlan.fetchTimeoutSeconds(bytes: entry.bytes))
+            }
             try await writer.writeBack(
                 description: entry.description,
                 keywords: MetadataWriteFieldRules.normalizedKeywords(entry.keywords),
                 timeoutSeconds: WriteBackPlan.timeoutSeconds(bytes: entry.bytes),
                 to: URL(fileURLWithPath: entry.path))
-            return .wrote(entry)
+            return .wrote(entry, fetchSeconds: waited)
         } catch {
             return .failed(entry, String(describing: error).prefix(300).description)
         }

@@ -50,6 +50,26 @@ public enum WriteBackPlan {
         return max(floor, (megabytes * 2 / megabytesPerSecond) * margin)
     }
 
+    /// How long to allow a cloud provider to hand over an evicted file, before exiftool starts.
+    ///
+    /// Deliberately not `timeoutSeconds`. That one scales with the file because it is paying for
+    /// bytes over SMB; this one barely scales at all, because fetching a placeholder was measured to
+    /// cost the same 12.8 to 26.8 seconds whether the file was 2 MB or 48 MB - it is a round trip to
+    /// the provider, not a transfer. A flat floor generous enough for the slowest observed fetch is
+    /// therefore the right shape, with a small size term so a 117 MB DNG is not held to a figure
+    /// measured on files a fortieth of its size.
+    ///
+    /// The floor is 90 s against a 26.8 s worst case measured at 8 lanes. That is deliberately fat:
+    /// the fetch competes with every other lane for one provider, the run is unattended for days,
+    /// and the cost of being wrong in this direction is one slow file where the cost of being wrong
+    /// in the other is a photograph logged as failed that was merely queued.
+    public static func fetchTimeoutSeconds(
+        bytes: Int, megabytesPerSecond: Double = 4, floor: Double = 90
+    ) -> Double {
+        let megabytes = Double(bytes) / (1024 * 1024)
+        return max(floor, megabytes / megabytesPerSecond)
+    }
+
     /// The entries still to do, in manifest order, given the paths a previous run finished.
     ///
     /// Keyed by path rather than hash on purpose, and it is the one place in either project where

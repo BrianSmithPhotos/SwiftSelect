@@ -60,6 +60,14 @@ enum WriteBackCommand {
         if outcome.failed + outcome.missing > 0 {
             say("failures listed in \(logDirectory.appendingPathComponent(WriteBackLog.failedName).path)")
         }
+        if outcome.fetched > 0 {
+            // Worth its own line: a fetch is tens of seconds against exiftool's half a second, so a
+            // run that looks slow is usually a run that spent its time waiting on a cloud provider.
+            let each = outcome.fetchSeconds / Double(outcome.fetched)
+            say(String(format: "%d were evicted and had to be fetched first, "
+                       + "%.0f s of waiting in total, %.1f s each",
+                       outcome.fetched, outcome.fetchSeconds, each))
+        }
         if !options.dryRun {
             say("each write changed the file, so its hash has changed. "
                 + WriteBackLog.doneName + " maps every photograph to the hash it had before, "

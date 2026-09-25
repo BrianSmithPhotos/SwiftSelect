@@ -31,6 +31,33 @@ private final class SpyWriter: WriteBackWriter, @unchecked Sendable {
     }
 }
 
+/// Records what was fetched and in what order relative to the writes, since a fetch that happens
+/// after exiftool has opened the file is no use at all.
+private final class FetchSpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+    var order: [String] { lock.withLock { events } }
+    func note(_ event: String) { lock.withLock { events.append(event) } }
+}
+
+/// Writes, and notes that it wrote, so a test can assert the fetch came first.
+private final class OrderedWriter: WriteBackWriter, @unchecked Sendable {
+    private let spy: FetchSpy
+    init(spy: FetchSpy) { self.spy = spy }
+    func writeBack(description: String, keywords: [String],
+                   timeoutSeconds: Double, to url: URL) async throws {
+        spy.note("write \(url.path)")
+    }
+}
+
+/// An actor rather than a lock because the fetch seam is async and this is awaited from inside it.
+private actor LaneCounter {
+    private var inFlight = 0
+    private(set) var peak = 0
+    func enter() { inFlight += 1; peak = max(peak, inFlight) }
+    func leave() { inFlight -= 1 }
+}
+
 /// Counts how many writes overlap, which is the only thing that distinguishes lanes from a loop.
 private final class LaneSpy: WriteBackWriter, @unchecked Sendable {
     private let lock = NSLock()
@@ -276,8 +303,6 @@ final class WriteBackRunTests: XCTestCase {
         XCTAssertEqual(try WriteBackLog.alreadyWritten(in: directory), ["/a.raf", "/b.raf"])
     }
 
-    // MARK: - helpers
-
     // MARK: - lanes
 
     func testByDefaultOnlyOnePhotographIsInFlight() async throws {
@@ -379,12 +404,123 @@ final class WriteBackRunTests: XCTestCase {
         XCTAssertEqual(outcome.missing, 4)
     }
 
+    // MARK: - evicted cloud files
+
+    func testAFileOnTheNasIsNeverFetched() async throws {
+        // The property that matters most in this whole change. A fetch on a NAS original means
+        // reading it twice, and there are 4,645 GB of them - days of link time for nothing.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .notCloud }
+        var asked = false
+        subject.fetch = { _, _ in asked = true; return 0 }
+        let outcome = await subject.run(entries: [entry("/Volumes/Photos/a.raf")], log: try WriteBackLog(directory: directory))
+        XCTAssertFalse(asked)
+        XCTAssertEqual(outcome.written, 1)
+        XCTAssertEqual(outcome.fetched, 0)
+    }
+
+    func testACloudFileWhoseBytesAreHereIsNotFetchedEither() async throws {
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .present }
+        var asked = false
+        subject.fetch = { _, _ in asked = true; return 0 }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")], log: try WriteBackLog(directory: directory))
+        XCTAssertFalse(asked)
+        XCTAssertEqual(outcome.written, 1)
+    }
+
+    func testAnEvictedFileIsFetchedBeforeItIsWritten() async throws {
+        let spy = FetchSpy()
+        let writer = OrderedWriter(spy: spy)
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { path, _ in spy.note("fetch \(path)"); return 3 }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")], log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 1)
+        XCTAssertEqual(spy.order, ["fetch /icloud/a.jpg", "write /icloud/a.jpg"])
+    }
+
+    func testTheAllowanceHandedToTheFetchIsTheFetchAllowance() async throws {
+        // Not `timeoutSeconds`. Passing that would reproduce exactly the defect this fixes.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        var given: Double?
+        subject.fetch = { _, timeout in given = timeout; return 1 }
+        _ = await subject.run(entries: [entry("/icloud/a.jpg", bytes: 2 * 1024 * 1024)],
+                              log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(given, WriteBackPlan.fetchTimeoutSeconds(bytes: 2 * 1024 * 1024))
+        XCTAssertGreaterThan(try XCTUnwrap(given), 26.8)
+    }
+
+    func testAFetchThatNeverArrivesIsAFailureAndExifToolIsNotStarted() async throws {
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { path, _ in
+            throw CloudFile.Failure.notFetched(path: path, afterSeconds: 90)
+        }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")], log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.failed, 1)
+        XCTAssertEqual(outcome.written, 0)
+        // Never written, so never logged as done: the resume set must offer it again.
+        XCTAssertTrue(writer.calls.isEmpty)
+        XCTAssertEqual(try WriteBackLog.alreadyWritten(in: directory), [])
+    }
+
+    func testWhatTheProvidersCostIsReported() async throws {
+        // A fetch is tens of seconds against exiftool's half a second, so a run that looks slow is
+        // usually a run waiting on a provider. Invisible unless it is counted.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        var evicted = true
+        subject.presence = { _ in evicted ? .evicted : .notCloud }
+        subject.fetch = { _, _ in 20 }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg"), entry("/icloud/b.jpg")],
+                                        log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 2)
+        XCTAssertEqual(outcome.fetched, 2)
+        XCTAssertEqual(outcome.fetchSeconds, 40, accuracy: 0.01)
+        evicted = false
+    }
+
+    func testEvictedFilesFetchInParallelWhenThereAreLanes() async throws {
+        // The measured reason lanes exist for iCloud: the wait is a round trip, so eight waits
+        // overlap into one. Serially this list would be 8 x 20 s.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.workers = 8
+        subject.presence = { _ in .evicted }
+        let counter = LaneCounter()
+        subject.fetch = { _, _ in
+            await counter.enter()
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            await counter.leave()
+            return 20
+        }
+        let entries = (0..<8).map { entry("/icloud/\($0).jpg") }
+        let outcome = await subject.run(entries: entries, log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 8)
+        // Hoisted: XCTAssert's arguments are autoclosures and cannot await.
+        let peak = await counter.peak
+        XCTAssertEqual(peak, 8)
+    }
+
     // MARK: - helpers
 
     private func run(writer: WriteBackWriter, quiet: QuietHours = .none,
                      dryRun: Bool = false) -> WriteBackRun {
         var subject = WriteBackRun(writer: writer, quiet: quiet, dryRun: dryRun)
         subject.exists = { _ in true }
+        // Every test path is the NAS unless a test says otherwise, which is what the real run sees
+        // for 142,566 of its 207,713 photographs.
+        subject.presence = { _ in .notCloud }
+        subject.fetch = { path, _ in
+            XCTFail("fetched \(path), which is not in a cloud provider")
+            return 0
+        }
         subject.say = { _ in }
         subject.pause = { _ in }
         return subject

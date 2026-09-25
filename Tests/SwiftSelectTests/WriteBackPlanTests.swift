@@ -66,6 +66,32 @@ final class WriteBackPlanTests: XCTestCase {
         XCTAssertEqual(slow, fast * 2, accuracy: 0.01)
     }
 
+    // MARK: - fetching an evicted file
+
+    func testTheFetchAllowanceIsFarLongerThanTheWriteAllowance() {
+        // The proven defect this exists for: a 2 MB placeholder gets 12 s to be written, and
+        // fetching one measured 12.8 s at best and 26.8 s at worst. Every small evicted file in
+        // iCloud would have failed before exiftool saw a byte.
+        let small = 2 * 1024 * 1024
+        XCTAssertEqual(WriteBackPlan.timeoutSeconds(bytes: small), 12, accuracy: 0.01)
+        XCTAssertGreaterThan(WriteBackPlan.fetchTimeoutSeconds(bytes: small), 26.8 * 2)
+    }
+
+    func testTheFetchAllowanceBarelyScalesBecauseTheCostIsNotBytes() {
+        // Measured: 2.1 MB took 26.8 s and 48.2 MB took 12.5. Size does not predict the wait, so
+        // the floor does nearly all the work and both of these land on it.
+        let small = WriteBackPlan.fetchTimeoutSeconds(bytes: 2 * 1024 * 1024)
+        let large = WriteBackPlan.fetchTimeoutSeconds(bytes: 48 * 1024 * 1024)
+        XCTAssertEqual(small, large, accuracy: 0.01)
+        XCTAssertEqual(small, 90, accuracy: 0.01)
+    }
+
+    func testAVeryLargeFileStillGetsMoreThanTheFloor() {
+        // 400 MB is past where the floor is credible even for a round-trip-bound fetch, so the
+        // size term takes over rather than holding a huge file to a figure measured on small ones.
+        XCTAssertGreaterThan(WriteBackPlan.fetchTimeoutSeconds(bytes: 400 * 1024 * 1024), 90)
+    }
+
     // MARK: - resume
 
     func testResumeSkipsWhatAPreviousRunFinished() {
