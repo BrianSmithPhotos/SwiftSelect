@@ -114,6 +114,11 @@ deterministically, and copy files into local storage.
   large; cmd-clicking toggles a finer-grained "ring-selection" within that row (e.g. exclude the RAW
   file from a set before processing). This ring-selection is a second, narrower level of multi-select
   than the grid's — see §5 for how it feeds process/move.
+- **Arrow keys** (Mac) step through whichever pane was last clicked, as a plain click on the
+  neighbouring tile would: in the grid, left/right move one capture set and up/down one row; in the
+  row under the preview, left/right move one member. They stop at the ends rather than wrapping, the
+  grid and row scroll to keep the selected tile in view, and a text field keeps its own arrow keys.
+  Shift/cmd-arrow are not handled.
 - iPad shows the previewed file's **Title** — the live rename preview (§4), batch label included,
   not the current filename — above the preview. A set's JPEG and RAW look identical at preview size,
   and the filmstrip is otherwise guesswork.

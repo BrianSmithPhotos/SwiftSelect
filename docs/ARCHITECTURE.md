@@ -7,12 +7,12 @@ Swift/SwiftUI equivalent of the reference app's `ui/` + `services/` + `workers/`
 
 - **`Sources/SwiftSelect/Views/`** — SwiftUI views, macOS-only. Layout and bindings only, no
   business logic. Equivalent to the reference app's `ui/widgets/`.
-- **`Sources/SwiftSelect/ViewModels/`** — `@MainActor` `ObservableObject` (or `@Observable`)
-  types that hold UI state and call into services, usually via `Task { }`. Equivalent to the
-  reference app's `ui/main_window.py` orchestration plus its `workers/` — Swift's structured
-  concurrency (`async`/`await`, `Task`) replaces the need for a separate `QRunnable`-style worker
-  layer. A view model kicks off an `async` service call in a `Task`, the service does its I/O off
-  the main actor, and the result flows back to `@Published` state.
+- **`Sources/SwiftSelect/ViewModels/`** — `@MainActor` `@Observable` types (owned with
+  `@State`, passed down as `@Bindable` where a view binds to them, else a plain reference) that
+  hold UI state and call into services, usually via `Task { }`. Equivalent to the reference app's
+  `ui/main_window.py` orchestration plus its `workers/` — Swift's structured concurrency
+  (`async`/`await`, `Task`) replaces the need for a separate `QRunnable`-style worker layer. A view model kicks off an `async` service call in a `Task`, the service does its I/O off
+  the main actor, and the result flows back to observed state.
 - **`Sources/SwiftSelectCore/Services/`** — the actual logic: capture grouping, renaming, AI
   provider calls, timeline/elevation/geocode lookups, and the `MetadataWriter` protocol itself.
   Same role as the reference app's `services/`: no Qt/SwiftUI imports, easy to unit test in
@@ -427,7 +427,7 @@ should start there rather than in Swift.
   `@MainActor`-isolated function directly — route it through a `Service` call from a `Task`.
 - Services that do I/O should be `async` and safe to call from a background context; mark them
   `Sendable` where the compiler asks.
-- UI state mutation (`@Published` updates) must happen back on the main actor — either the
+- UI state mutation must happen back on the main actor — either the
   ViewModel method itself is `@MainActor` and simply `await`s the service call, or you explicitly
   hop back with `await MainActor.run { }`.
 

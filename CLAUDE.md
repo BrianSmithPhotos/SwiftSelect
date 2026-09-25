@@ -80,7 +80,13 @@ toolchain. Run `swift build`/`swift test` with
 sets it automatically. The deployment floor is macOS 15 / iOS 27. The Mac floor stays below 27
 on purpose: a macOS 26 or 27 floor opts SwiftUI into new window-sizing behaviour that crashes when
 the `.inspector` pane is dragged (proven with a bare repro, 2026-09-25; a 15 floor is fine). So
-`FoundationModelsProvider` keeps its runtime `#available(macOS 27.0, ...)` gates.
+`FoundationModelsProvider` keeps its runtime `#available(macOS 27.0, ...)` gates. The cost is
+**no Liquid Glass on Mac**: SwiftPM records the linked SDK as equal to the floor, and AppKit reads
+that to pick the design. Forcing SDK 27 with a 15 floor (linker `-platform_version macos 15.0
+27.0`) brings glass back, but the full app then crashes the same way — the bug comes with the new
+design, not the floor number. Don't retry that until Apple fixes it; retest each macOS 27 update
+with the bare repro (a Feedback package was prepared outside the repo). Glass-only APIs like
+`ToolbarSpacer` and `sharedBackgroundVisibility` do nothing visible until then.
 
 ## File Safety
 
