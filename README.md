@@ -16,7 +16,7 @@ Two more that are worth knowing exist:
 
 ## Requirements
 
-- macOS 14+
+- macOS 27+ (iPad: iOS 27+)
 - Xcode (recommended, for SwiftUI Previews) or the Swift toolchain via Xcode Command Line Tools
   (`xcode-select --install`) if working from another editor.
 - [`exiftool`](https://exiftool.org/) on `PATH` (`brew install exiftool`) — all metadata read/write

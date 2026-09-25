@@ -4,8 +4,8 @@ import PackageDescription
 let package = Package(
     name: "SwiftSelect",
     platforms: [
-        .macOS(.v14),
-        .iOS(.v17)
+        .macOS("27.0"),
+        .iOS("27.0")
     ],
     products: [
         // Consumed as a local package dependency by SwiftSelectPad/ (a separate, real Xcode

@@ -2,7 +2,7 @@ name: SwiftSelectPad
 options:
   bundleIdPrefix: photos.briansmith
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "27.0"
 
 packages:
   SwiftSelectCore:
