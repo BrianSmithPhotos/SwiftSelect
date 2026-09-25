@@ -1,45 +1,47 @@
 import AppKit
 import Foundation
+import Observation
 import os
 import SwiftSelectCore
 
 /// Holds the currently-browsed folder's capture sets and the current selection. Views bind to
-/// this via `@StateObject`/`@ObservedObject`; it owns no I/O itself — it kicks off `Service` calls
-/// from a `Task` and republishes the results, per docs/ARCHITECTURE.md "Layers".
+/// this via `@State`/`@Bindable` (it is `@Observable`); it owns no I/O itself — it kicks off
+/// `Service` calls from a `Task` and republishes the results, per docs/ARCHITECTURE.md "Layers".
 ///
 /// `@MainActor` on the class means every property and method here is main-actor-isolated by
-/// default: SwiftUI reads `@Published` properties on the main thread, so this guarantees those
+/// default: SwiftUI reads observed properties on the main thread, so this guarantees those
 /// reads never race the writes below. It's also why `loadFolder` doesn't need to hop back to the
 /// main actor explicitly after `await` — the compiler already knows this whole class runs there,
 /// and only the `await loader.loadAssets(...)` line itself briefly suspends onto the service's
 /// background task.
 @MainActor
-final class SourceBrowserViewModel: ObservableObject {
-    @Published private(set) var captureSets: [CaptureSet] = []
+@Observable
+final class SourceBrowserViewModel {
+    private(set) var captureSets: [CaptureSet] = []
     /// Capture sets skipped in the current folder — populated alongside `captureSets` in `load(_:)`
     /// and kept in sync by `skip(_:)`/`unskip(_:)`. Only ever shown by `SourcePanelView`'s
     /// "Skipped" segmented-filter view; not selectable for editing or process/move.
-    @Published private(set) var skippedCaptureSets: [CaptureSet] = []
+    private(set) var skippedCaptureSets: [CaptureSet] = []
     /// Which of `captureSets`/`skippedCaptureSets` `SourcePanelView`'s grid currently displays.
     ///
     /// `didSet` re-focuses selection onto the first item of whichever list is now shown — without
     /// this, switching filters left the previous filter's selection/preview lingering (or nothing
     /// selected at all the first time `.skipped` is shown), rather than the grid and preview
     /// agreeing on what's focused.
-    @Published var sourceViewFilter: SourceViewFilter = .active {
+    var sourceViewFilter: SourceViewFilter = .active {
         didSet {
             guard sourceViewFilter != oldValue else { return }
             selectFirstTile()
         }
     }
-    @Published private(set) var subfolders: [URL] = []
+    private(set) var subfolders: [URL] = []
     /// The path from the folder the user opened down to the folder currently displayed — e.g.
     /// `[card, DCIM, 100OLYMP]`. Drives the breadcrumb bar; see docs/SPEC.md §1 "folder tree" and
     /// `FolderBrowser`'s doc comment for why this is breadcrumb navigation rather than a recursive
     /// tree.
-    @Published private(set) var breadcrumb: [URL] = []
-    @Published private(set) var isLoading = false
-    @Published var loadErrorMessage: String?
+    private(set) var breadcrumb: [URL] = []
+    private(set) var isLoading = false
+    var loadErrorMessage: String?
     /// The single asset shown large in the center preview — always a member of whatever the grid
     /// or filmstrip most recently pointed at. See `multiSelectedIDs` for the separate batch-action
     /// selection.
@@ -47,7 +49,7 @@ final class SourceBrowserViewModel: ObservableObject {
     /// `didSet` resyncs the metadata edit buffer below to match whatever's now selected, discarding
     /// any unsaved in-progress edit on the previously-selected asset — there's no autosave-on-switch
     /// in this first pass, see `loadEditBuffer`.
-    @Published var selectedAssetID: PhotoAsset.ID? {
+    var selectedAssetID: PhotoAsset.ID? {
         didSet {
             guard selectedAssetID != oldValue else { return }
             loadEditBuffer()
@@ -59,16 +61,16 @@ final class SourceBrowserViewModel: ObservableObject {
     /// image tile in the grid); a plain click resets this to just that one tile. Drives the
     /// `.manualSelection` process/move scope and, via `refreshVariantStrip`, what the filmstrip
     /// under the preview shows.
-    @Published private(set) var multiSelectedIDs: Set<PhotoAsset.ID> = []
+    private(set) var multiSelectedIDs: Set<PhotoAsset.ID> = []
     private var rangeAnchorID: PhotoAsset.ID?
 
     /// The full capture-group membership of the current grid selection (`SelectionScope.resolveScope`)
     /// — the filmstrip under the preview renders exactly this list, in this order.
-    @Published private(set) var variantMemberIDs: [PhotoAsset.ID] = []
+    private(set) var variantMemberIDs: [PhotoAsset.ID] = []
     /// Ring-selected subset of `variantMemberIDs` — starts equal to the full scope; cmd-click on a
     /// filmstrip tile narrows it (kept non-empty, mirroring the reference app). Not yet consumed by
     /// any action (there's no "Save Selected"/AI wiring in this app yet) — reserved for that.
-    @Published private(set) var variantSelectedIDs: Set<PhotoAsset.ID> = []
+    private(set) var variantSelectedIDs: Set<PhotoAsset.ID> = []
 
     var hasMultiSelection: Bool { multiSelectedIDs.count > 1 }
 
@@ -77,29 +79,29 @@ final class SourceBrowserViewModel: ObservableObject {
     /// once rather than every process action; `setLibraryRoot` is also how the user changes it
     /// later. This app has no App Sandbox entitlement (no `.entitlements` file in the package), so
     /// a plain persisted path is enough — no security-scoped bookmark dance required.
-    @Published private(set) var libraryRootURL: URL?
-    @Published private(set) var isProcessing = false
-    @Published var processStatusMessage: String?
+    private(set) var libraryRootURL: URL?
+    private(set) var isProcessing = false
+    var processStatusMessage: String?
     /// Files finished (successfully or not) and the scope's total, driving the determinate progress
     /// bar shown while `isProcessing`. Per-file granularity is as fine as this can get without
     /// `ProcessMoveService` reporting from inside a single copy — see `process(scope:libraryRoot:)`.
-    @Published private(set) var processedFileCount = 0
-    @Published private(set) var processTotalCount = 0
+    private(set) var processedFileCount = 0
+    private(set) var processTotalCount = 0
 
     /// State for `importIPadExport(from:)`, kept separate from `isProcessing`/`processStatusMessage`
     /// because the two run against different files entirely — the import reads a pulled folder, not
     /// the browsing session — and the import sheet is where its progress belongs.
-    @Published private(set) var isImportingIPadExport = false
-    @Published private(set) var iPadImportStatusMessage: String?
+    private(set) var isImportingIPadExport = false
+    private(set) var iPadImportStatusMessage: String?
     /// Files imported so far and the pulled folder's total, driving the import sheet's determinate
     /// progress bar. Both stay 0 through the scan and the batched maker-note read, which run before
     /// `IPadImportService.importAll`'s per-file loop knows a total — the sheet shows an
     /// indeterminate spinner until the first callback arrives.
-    @Published private(set) var iPadImportedFileCount = 0
-    @Published private(set) var iPadImportTotalCount = 0
+    private(set) var iPadImportedFileCount = 0
+    private(set) var iPadImportTotalCount = 0
     /// Set once an import finishes, so the sheet can list what was skipped. `nil` while one is
     /// running or before the first run.
-    @Published private(set) var iPadImportSummary: IPadImportSummary?
+    private(set) var iPadImportSummary: IPadImportSummary?
 
     /// The metadata panel's editable fields, kept as free text (parsed via `MetadataEditParsing` at
     /// save time) rather than typed properties so the view can bind `TextField`s directly. Synced
@@ -112,60 +114,60 @@ final class SourceBrowserViewModel: ObservableObject {
     /// so it's effectively a live display of the eventual rename, not a separate saved field — see
     /// `_process_one` in `process_batch_mover.py`, which derives the title actually written to disk
     /// from the rename filename, never from a user-typed title). See [[feedback-follow-reference-app]].
-    @Published var editableDescription: String = ""
-    @Published var editableKeywords: String = ""
+    var editableDescription: String = ""
+    var editableKeywords: String = ""
 
     /// The keywords `loadEditBuffer` put in `editableKeywords` for the current photo, so `suggestAI`
     /// can tell what the user has added by hand since (see `MetadataEditParsing.userAddedKeywords`).
     /// Deliberately not refreshed by the suggestion's own auto-save: a hint typed for this photo
     /// keeps steering repeat Suggest runs until the selection moves.
     private var loadedKeywords: [String] = []
-    @Published var editableLatitudeText: String = ""
-    @Published var editableLongitudeText: String = ""
-    @Published private(set) var isSavingMetadata = false
-    @Published var saveStatusMessage: String?
+    var editableLatitudeText: String = ""
+    var editableLongitudeText: String = ""
+    private(set) var isSavingMetadata = false
+    var saveStatusMessage: String?
 
     /// Status text for the Timeline-derived GPS suggestion (docs/SPEC.md §7) shown under the
     /// lat/long fields — e.g. "Nearest GPS 3m 20s away (GPS, accuracy 12m)". Set by
     /// `suggestGPSIfNeeded()` or by reverse-geocode keyword lookup; cleared on every selection
     /// change by `loadEditBuffer()` so a message from one photo never lingers under another.
-    @Published var gpsSuggestionStatusMessage: String?
+    var gpsSuggestionStatusMessage: String?
 
     /// True while *any* Timeline Drive sync/import is in flight — the silent one from launch and
     /// folder-open as well as the explicit "Refresh Timeline" button. Disables that button, and
     /// drives the toolbar spinner in `ContentView`: the launch import takes seconds on a large
     /// export, and until it finishes GPS suggestions are simply absent, which reads as a broken
     /// feature rather than a busy one.
-    @Published private(set) var isSyncingTimeline = false
+    private(set) var isSyncingTimeline = false
 
     /// Result text for a manually-triggered `refreshTimeline()` — e.g. "Imported 214 Timeline
     /// points." or "Timeline is already up to date." The silent per-launch/per-folder-load sync
     /// (`syncAndImportTimelineIfNeeded()`) never touches this; it's only for the explicit button.
-    @Published var timelineSyncStatusMessage: String?
+    var timelineSyncStatusMessage: String?
 
     /// True while `refreshAltitude()` has an elevation lookup in flight — disables the manual
     /// refresh button so a slow/timed-out USGS EPQS call can't be fired twice concurrently.
-    @Published private(set) var isLookingUpAltitude = false
+    private(set) var isLookingUpAltitude = false
 
     /// AI vision model used for AI-assisted description/keyword suggestions (docs/SPEC.md §6), in
     /// `"<provider>:<model>"` form (see `AIModelSelection`) — editable so the user can point at any
     /// pulled Ollama model or OpenRouter model id without a rebuild.
-    @Published var aiModelText: String = AIModelSelection.presets[0]
+    var aiModelText: String = AIModelSelection.presets[0]
     /// True while `suggestAI()` has a request (and its immediate auto-save) in flight — disables
     /// the Suggest button so a slow local-model response can't be fired twice concurrently.
-    @Published private(set) var isSuggestingAI = false
-    @Published var aiStatusMessage: String?
+    private(set) var isSuggestingAI = false
+    var aiStatusMessage: String?
     /// True while a batch run is working through its capture sets. Separate from `isSuggestingAI`
     /// because the two are not the same button and must not disable each other by accident: a batch
     /// run sets this for minutes, and `isSuggestingAI` still belongs to the one request in flight.
-    @Published private(set) var isBatchSuggestingAI = false
+    private(set) var isBatchSuggestingAI = false
     /// How far a batch run has got, for the progress caption. Total is fixed when the run starts.
-    @Published private(set) var batchAICompletedCount = 0
-    @Published private(set) var batchAITotalCount = 0
+    private(set) var batchAICompletedCount = 0
+    private(set) var batchAITotalCount = 0
     /// Whether a batch run also re-describes sets that already have a description. Off by default
     /// and deliberately not persisted: it is a decision about this run, over these files, and a
     /// setting that quietly stayed on would overwrite hand-written prose on the next folder.
-    @Published var batchAIRedescribesDescribedSets = false
+    var batchAIRedescribesDescribedSets = false
     /// The exact image the last `suggestAI()` call sent to the model (post `SubjectIsolationService`
     /// crop, when one was found) — shown in the Metadata panel so a misidentification is diagnosable
     /// (was the model looking at the subject, or a diluted full frame?).
@@ -175,16 +177,16 @@ final class SourceBrowserViewModel: ObservableObject {
     /// JPEG-first representative) while the AI is sent `AISuggestionSourcePicker`'s pick (the RAW),
     /// so the two can be different files — and a description of something not visible in the preview
     /// is otherwise indistinguishable from a hallucination. See `aiEvaluatedImageSourceName`.
-    @Published private(set) var aiEvaluatedImage: CGImage?
+    private(set) var aiEvaluatedImage: CGImage?
     /// Filename of the asset `aiEvaluatedImage` was decoded from, shown alongside it so the
     /// preview-vs-sent file distinction above is visible rather than inferred.
-    @Published private(set) var aiEvaluatedImageSourceName: String?
+    private(set) var aiEvaluatedImageSourceName: String?
     /// User-drawn override for the subject crop (image-pixel space, matching the 2048px-cap decode
     /// `extractPreviewAsync` produces), set by dragging a rectangle on `PreviewPanelView`'s big
     /// preview. When present, it's used in place of `SubjectIsolationService`'s AI-computed crop —
     /// both for the eager `aiEvaluatedImage` preview and for the next `suggestAI()` call. Cleared on
     /// every selection change by `loadEditBuffer()`, same lifetime as `aiEvaluatedImage`.
-    @Published private(set) var manualSubjectCropRect: CGRect?
+    private(set) var manualSubjectCropRect: CGRect?
     /// Handle to the in-flight eager crop computation kicked off by `setSubjectIsolationEnabled`/
     /// `setManualCropRect`/a selection change — cancelled and replaced on every retrigger so a slow
     /// Vision request for a since-abandoned photo can't clobber `aiEvaluatedImage` after the fact.
@@ -208,7 +210,7 @@ final class SourceBrowserViewModel: ObservableObject {
     /// here), but for a few flagship pay-per-token models the user judged the accuracy gain isn't
     /// worth the added cost by default. Persisted in `UserDefaults`; `SettingsView` exposes a
     /// per-model Toggle via `setEBirdCandidateListEnabled(_:forModel:)`.
-    @Published private(set) var eBirdDisabledModels: Set<String>
+    private(set) var eBirdDisabledModels: Set<String>
 
     /// Whether `suggestAI()` crops to a detected subject before sending the image to the AI — either
     /// `SubjectIsolationService`'s AI-picked crop, or `manualSubjectCropRect` when the user's drawn an
@@ -221,12 +223,12 @@ final class SourceBrowserViewModel: ObservableObject {
     /// preference, so it lives there rather than `SettingsView`). Turning it on (or switching photos
     /// while it's already on) eagerly computes and shows the crop via `recomputeSubjectCropPreview()`
     /// rather than waiting for a `suggestAI()` call.
-    @Published private(set) var subjectIsolationEnabled: Bool
+    private(set) var subjectIsolationEnabled: Bool
 
     /// Whether the camera-look strip is drawn over the preview (docs/SPEC.md "Ideas, not started").
     /// Off by default and persisted: it covers part of the photo, so it's a thing the user reaches
     /// for when reading a look rather than something that should be in the way while culling.
-    @Published private(set) var lookVisualiserEnabled: Bool
+    private(set) var lookVisualiserEnabled: Bool
 
     /// Off-by-default set as of 2026-07-05 — the user's call, not derived from anything measurable;
     /// revisit if the OpenRouter preset list (`AIModelSelection.presets`) changes these model names.
@@ -312,7 +314,7 @@ final class SourceBrowserViewModel: ObservableObject {
     /// `didSet` recomputes `renamePreviewFilename` immediately, so the Title field the user sees
     /// updates live as they type a batch label — same as the reference app's
     /// `location_edit.textChanged` -> `_update_rename_preview` wiring.
-    @Published var sessionBatch: String = "" {
+    var sessionBatch: String = "" {
         didSet {
             guard sessionBatch != oldValue else { return }
             updateRenamePreview()
@@ -325,7 +327,7 @@ final class SourceBrowserViewModel: ObservableObject {
     /// dependency-free preview, same as the reference app's `_update_rename_preview`); the
     /// authoritative check against the real destination folder happens at process time in
     /// `ProcessMoveService`, so this can differ from the final name in rare collision cases.
-    @Published private(set) var renamePreviewFilename: String = ""
+    private(set) var renamePreviewFilename: String = ""
 
     /// What the Title field displays — the rename preview's filename stem, not a separately typed
     /// or saved value. See the note on `editableDescription` above for why there's no `editableTitle`.
@@ -937,7 +939,7 @@ final class SourceBrowserViewModel: ObservableObject {
     /// least once — drives the non-blocking checkmark badge on `CaptureTileView`/`VariantTileView`.
     /// Purely informational: unlike `skippedCaptureSets`, being in this set never hides or disables
     /// anything, since reprocessing must stay freely available.
-    @Published private(set) var processedAssetPaths: Set<String> = []
+    private(set) var processedAssetPaths: Set<String> = []
 
     /// Lazily created for the same reason as `skipStore` above.
     private var processedStore: ProcessedStateStore?
@@ -1753,8 +1755,8 @@ final class SourceBrowserViewModel: ObservableObject {
         skip(selectedCaptureSet)
     }
 
-    @Published private(set) var isDevelopingRAW = false
-    @Published var developStatusMessage: String?
+    private(set) var isDevelopingRAW = false
+    var developStatusMessage: String?
 
     /// Whether Develop RAW has anything to do for `scope` — drives the context menu item's enabled
     /// state, so it must stay cheap enough to evaluate during a view update. It answers from the

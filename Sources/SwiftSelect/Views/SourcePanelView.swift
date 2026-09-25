@@ -8,7 +8,7 @@ import SwiftSelectCore
 /// Navigation is breadcrumb-style (one level open at a time) rather than a recursive expandable
 /// tree — see `FolderBrowser`'s doc comment for why.
 struct SourcePanelView: View {
-    @ObservedObject var viewModel: SourceBrowserViewModel
+    @Bindable var viewModel: SourceBrowserViewModel
     @State private var isChoosingFolder = false
     /// The grid's scroll view width, measured from outside it. See `columnCount(forWidth:)`.
     @State private var gridWidth: CGFloat = 0

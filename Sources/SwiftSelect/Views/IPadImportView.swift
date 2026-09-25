@@ -10,7 +10,7 @@ import SwiftSelectCore
 /// point. A skipped file keeps the description, keywords and GPS entered on the iPad and nothing
 /// else knows they exist, so it has to be visible rather than folded into a one-line status.
 struct IPadImportView: View {
-    @ObservedObject var viewModel: SourceBrowserViewModel
+    var viewModel: SourceBrowserViewModel
     @Environment(\.dismiss) private var dismiss
 
     @State private var exportRoot: URL?

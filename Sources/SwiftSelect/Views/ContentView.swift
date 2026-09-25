@@ -7,7 +7,7 @@ import SwiftSelectCore
 /// instance for the app's lifetime — it's shared with the Settings scene, which also reads/writes
 /// `libraryRootURL`. See `SwiftSelectApp`'s doc comment for why.
 struct ContentView: View {
-    @ObservedObject var browser: SourceBrowserViewModel
+    var browser: SourceBrowserViewModel
     @State private var isMetadataPanelPresented = true
     @State private var isIPadImportPresented = false
 

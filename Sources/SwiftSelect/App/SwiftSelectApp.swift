@@ -34,7 +34,7 @@ struct SwiftSelectApp: App {
     /// Owned here (rather than by `ContentView`) so the Settings scene below can share the same
     /// instance — the library-root setting it edits has to be visible to the main window's process
     /// actions, not a separate copy.
-    @StateObject private var browser = SourceBrowserViewModel()
+    @State private var browser = SourceBrowserViewModel()
 
     var body: some Scene {
         WindowGroup {

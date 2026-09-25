@@ -50,7 +50,7 @@ private struct LookStripOverlay: View {
 /// read `variantMemberIDs`/`variantSelectedIDs` and resolve any member of the current selection —
 /// not just the one asset shown large.
 struct PreviewPanelView: View {
-    @ObservedObject var viewModel: SourceBrowserViewModel
+    var viewModel: SourceBrowserViewModel
 
     @State private var previewImage: CGImage?
     /// Preview scale as a multiple of Fit — see `ZoomableImageView.fitMultiple`. Held here rather
@@ -177,7 +177,7 @@ struct PreviewPanelView: View {
 /// intended to back AI/process-move actions that operate on a fine-tuned subset, mirroring the
 /// reference app's variant strip.
 private struct SelectedImagesStripView: View {
-    @ObservedObject var viewModel: SourceBrowserViewModel
+    var viewModel: SourceBrowserViewModel
 
     private var members: [PhotoAsset] {
         // Both lists, not just the currently-displayed filter — the active preview can be a

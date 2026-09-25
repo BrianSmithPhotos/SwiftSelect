@@ -13,7 +13,7 @@ import SwiftSelectCore
 /// right-click menu — it's the last action taken once editing an SD card's images is done, so it
 /// belongs at the foot of this pane.
 struct MetadataPanelView: View {
-    @ObservedObject var viewModel: SourceBrowserViewModel
+    @Bindable var viewModel: SourceBrowserViewModel
     @State private var isChoosingLibraryFolder = false
     /// Set right before showing the library-folder picker for a process action that ran with no
     /// library root configured yet, so the picker's completion handler knows to run that action

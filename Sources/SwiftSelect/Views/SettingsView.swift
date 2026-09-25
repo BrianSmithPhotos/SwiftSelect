@@ -7,7 +7,7 @@ import SwiftSelectCore
 /// "rarely touched" actions, so they live in their own Settings scene rather than a header button
 /// in the main window.
 struct SettingsView: View {
-    @ObservedObject var viewModel: SourceBrowserViewModel
+    var viewModel: SourceBrowserViewModel
     @State private var isChoosingFolder = false
     @State private var eBirdAPIKey = ""
     @State private var openRouterAPIKey = ""
