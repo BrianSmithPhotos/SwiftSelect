@@ -3,7 +3,7 @@ import SwiftSelectCore
 
 /// Three-panel shell: source browser | preview | metadata. See docs/SPEC.md §1-3.
 ///
-/// `@ObservedObject` here (not `@StateObject`) because `SwiftSelectApp` now owns the one
+/// A plain reference (not `@State`) because `SwiftSelectApp` owns the one
 /// instance for the app's lifetime — it's shared with the Settings scene, which also reads/writes
 /// `libraryRootURL`. See `SwiftSelectApp`'s doc comment for why.
 struct ContentView: View {
