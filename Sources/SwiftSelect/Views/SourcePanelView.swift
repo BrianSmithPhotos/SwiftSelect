@@ -10,8 +10,39 @@ import SwiftSelectCore
 struct SourcePanelView: View {
     @ObservedObject var viewModel: SourceBrowserViewModel
     @State private var isChoosingFolder = false
+    /// The grid's scroll view width, measured from outside it. See `columnCount(forWidth:)`.
+    @State private var gridWidth: CGFloat = 0
 
-    private let columns = [GridItem(.adaptive(minimum: 96), spacing: 8)]
+    private static let tileMinimumWidth: CGFloat = 96
+    private static let tileSpacing: CGFloat = 8
+    /// Always set aside, whatever the scroll bar style, so an always-shown scroll bar appearing or
+    /// going never changes the tiles' width. Costs a few points of tile size with overlay scroll bars.
+    private static let scrollerAllowance: CGFloat = NSScroller.scrollerWidth(
+        for: .regular, scrollerStyle: .legacy)
+
+    private var columns: [GridItem] {
+        let usable = gridWidth - Self.scrollerAllowance
+        let count = Self.columnCount(forWidth: usable)
+        let side = Self.tileSide(forWidth: usable, columns: count)
+        return Array(repeating: GridItem(.fixed(side), spacing: Self.tileSpacing), count: count)
+    }
+
+    /// The same arithmetic as `GridItem(.adaptive(minimum: 96))`, but fed the scroll view's outer
+    /// width rather than its content width. With "Show scroll bars: Always" an adaptive grid right
+    /// at the one-screenful boundary loops: the scroll bar appears, narrows the content, a column
+    /// drops, the content shortens, the scroll bar goes, the column returns. Built with a macOS 27
+    /// floor, AppKit lets that run until it throws "more Update Constraints in Window passes than
+    /// there are views in the window"; lower floors tolerate the loop, but it still runs. The
+    /// outer width does not change when the scroll bar comes and goes, so neither the column count
+    /// nor the (square) tile size here can oscillate.
+    static func columnCount(forWidth width: CGFloat) -> Int {
+        max(1, Int((width + tileSpacing) / (tileMinimumWidth + tileSpacing)))
+    }
+
+    /// Fills the usable width exactly, as the adaptive grid did, but as a fixed size.
+    static func tileSide(forWidth width: CGFloat, columns: Int) -> CGFloat {
+        max(tileMinimumWidth, (width - CGFloat(columns - 1) * tileSpacing) / CGFloat(columns))
+    }
 
     private var displayedCaptureSets: [CaptureSet] {
         switch viewModel.sourceViewFilter {
@@ -66,7 +97,7 @@ struct SourcePanelView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 8) {
+                    LazyVGrid(columns: columns, spacing: Self.tileSpacing) {
                         ForEach(displayedCaptureSets) { captureSet in
                             if let representative = captureSet.representative {
                                 CaptureTileView(
@@ -105,6 +136,7 @@ struct SourcePanelView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
             }
         }
         .padding()

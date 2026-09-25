@@ -113,13 +113,14 @@ final class ZoomScrollView: NSScrollView {
     }
 
     /// Magnification at which the whole image is visible. Depends on the pane size, so it's
-    /// recomputed on every layout rather than cached.
+    /// recomputed on every layout rather than cached. Zero when there's no size yet, which every
+    /// caller's `fit > 0` guard skips; a fallback of 1 would pass that guard and apply a bogus fit.
     private var fitMagnification: CGFloat {
-        guard let documentView else { return 1 }
+        guard let documentView else { return 0 }
         let imageSize = documentView.frame.size
         let available = contentView.frame.size
         guard imageSize.width > 0, imageSize.height > 0, available.width > 0, available.height > 0
-        else { return 1 }
+        else { return 0 }
         return min(available.width / imageSize.width, available.height / imageSize.height)
     }
 
@@ -132,6 +133,8 @@ final class ZoomScrollView: NSScrollView {
         super.layout()
         let fit = fitMagnification
         guard fit > 0 else { return }
+        // NSScrollView throws if min ever exceeds max, so widen the range before narrowing it.
+        maxMagnification = max(maxMagnification, fit * Self.maximumFitMultiple)
         minMagnification = fit
         maxMagnification = fit * Self.maximumFitMultiple
         if let restore = pendingRestore {
