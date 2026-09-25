@@ -35,7 +35,7 @@ import SwiftSelectCore
 /// staging folder inside the app's own container, not something the user chooses (see that
 /// property's doc comment for why).
 struct MetadataPanelView: View {
-    @ObservedObject var viewModel: PhotoBrowserViewModel
+    @Bindable var viewModel: PhotoBrowserViewModel
 
     private var asset: PhotoAsset? { viewModel.previewAsset }
 

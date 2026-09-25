@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import UIKit
 import os
 import SwiftSelectCore
@@ -27,23 +28,24 @@ import SwiftSelectCore
 /// that only exists to further narrow a Save/Process scope beyond the grid's own multi-selection —
 /// see `PreviewPanelView`'s doc comment.
 @MainActor
-final class PhotoBrowserViewModel: ObservableObject {
-    @Published private(set) var breadcrumb: [URL] = []
-    @Published private(set) var subfolders: [URL] = []
-    @Published var sourceViewFilter: SourceViewFilter = .active {
+@Observable
+final class PhotoBrowserViewModel {
+    private(set) var breadcrumb: [URL] = []
+    private(set) var subfolders: [URL] = []
+    var sourceViewFilter: SourceViewFilter = .active {
         didSet { selectFirstTile() }
     }
-    @Published private(set) var captureSets: [CaptureSet] = []
-    @Published private(set) var skippedCaptureSets: [CaptureSet] = []
-    @Published private(set) var isLoading = false
-    @Published private(set) var loadErrorMessage: String?
+    private(set) var captureSets: [CaptureSet] = []
+    private(set) var skippedCaptureSets: [CaptureSet] = []
+    private(set) var isLoading = false
+    private(set) var loadErrorMessage: String?
 
     /// The grid's current selection. The filmstrip's own `previewAssetID` (below) can point at a
     /// different member of this set's capture group without changing which tile is selected.
     ///
     /// `didSet` resyncs the metadata edit buffer to whatever's now shown large, discarding any
     /// unsaved in-progress edit — mirrors the Mac app's `SourceBrowserViewModel.selectedAssetID`.
-    @Published private(set) var selectedAssetID: PhotoAsset.ID? {
+    private(set) var selectedAssetID: PhotoAsset.ID? {
         didSet {
             guard selectedAssetID != oldValue else { return }
             loadEditBuffer()
@@ -52,7 +54,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// Which member of `selectedCaptureSet` the big preview shows — `nil` means "the
     /// representative." Separate from `selectedAssetID` so tapping a filmstrip thumbnail doesn't
     /// re-select a different grid tile.
-    @Published private(set) var previewAssetID: PhotoAsset.ID? {
+    private(set) var previewAssetID: PhotoAsset.ID? {
         didSet {
             guard previewAssetID != oldValue else { return }
             loadEditBuffer()
@@ -65,20 +67,20 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// `loadEditBuffer` whenever the selection/preview changes. No `editableTitle`: per
     /// docs/SPEC.md §3/§4, Title only becomes real metadata at Process & Move time (not built on
     /// iPad yet) — until then it's just `titlePreview` below, a live rename preview.
-    @Published var editableDescription: String = ""
-    @Published var editableKeywords: String = ""
+    var editableDescription: String = ""
+    var editableKeywords: String = ""
 
     /// The keywords `loadEditBuffer` (or a staged draft) put in `editableKeywords` for the current
     /// photo, so `suggestAI` can tell what the user has added by hand since (see
     /// `MetadataEditParsing.userAddedKeywords`) — mirrors the Mac app's `loadedKeywords`.
     private var loadedKeywords: [String] = []
-    @Published private(set) var isSavingMetadata = false
-    @Published var saveStatusMessage: String?
+    private(set) var isSavingMetadata = false
+    var saveStatusMessage: String?
 
     /// The manual per-session label `RenameService` needs for its filename pattern (docs/SPEC.md
     /// §4) — mirrors the Mac app's `sessionBatch`. `didSet` recomputes `renamePreviewFilename`
     /// immediately so the Title field updates live as the user types a batch label.
-    @Published var sessionBatch: String = "" {
+    var sessionBatch: String = "" {
         didSet {
             guard sessionBatch != oldValue else { return }
             updateRenamePreview()
@@ -90,7 +92,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// Mac app's `renamePreviewFilename` doc comment: the authoritative check happens at Process &
     /// Move time (not built on iPad yet), so this can differ from the eventual final name in rare
     /// collision cases.
-    @Published private(set) var renamePreviewFilename: String = ""
+    private(set) var renamePreviewFilename: String = ""
     /// What the Title field displays — the rename preview's filename stem, never independently typed
     /// or saved. See `editableDescription`'s doc comment for why there's no `editableTitle`.
     var titlePreview: String { (renamePreviewFilename as NSString).deletingPathExtension }
@@ -118,30 +120,30 @@ final class PhotoBrowserViewModel: ObservableObject {
         return staging
     }
 
-    @Published private(set) var isProcessing = false
-    @Published var processStatusMessage: String?
+    private(set) var isProcessing = false
+    var processStatusMessage: String?
     /// Files finished (successfully or not) and the scope's total, driving the determinate progress
     /// bar shown while `isProcessing`. Per-file granularity is as fine as this can get without
     /// `ProcessMoveService` reporting from inside a single copy — see `process(scope:)`.
-    @Published private(set) var processedFileCount = 0
-    @Published private(set) var processTotalCount = 0
+    private(set) var processedFileCount = 0
+    private(set) var processTotalCount = 0
 
     /// Status text for the Timeline-derived GPS suggestion (docs/SPEC.md §7), shown under the
     /// read-only lat/long fields — e.g. "Nearest GPS 3m 20s away (GPS, accuracy 12m)". Set by
     /// `suggestGPSIfNeeded()`, cleared on every selection change by `loadEditBuffer()`. Mirrors the
     /// Mac app's `gpsSuggestionStatusMessage`.
-    @Published var gpsSuggestionStatusMessage: String?
+    var gpsSuggestionStatusMessage: String?
     /// True while `refreshAltitude()` has an elevation lookup in flight — disables the manual
     /// altitude refresh button so it can't be fired twice at once.
-    @Published private(set) var isLookingUpAltitude = false
+    private(set) var isLookingUpAltitude = false
 
     /// Result/progress text for the Timeline import, shown in the iPad `SettingsView` — e.g.
     /// "Imported 214 Timeline point(s)." or "Timeline is already up to date." Unlike the Mac app's
     /// silent per-folder-load `TimelineDriveSync` (which globs a mounted Drive path), the iPad reads
     /// `Timeline.json` through a persisted security-scoped bookmark the user grants once via the
     /// document picker — see `SettingsView` and docs/ARCHITECTURE.md's iPad file-access section.
-    @Published var timelineStatusMessage: String?
-    @Published private(set) var isImportingTimeline = false
+    var timelineStatusMessage: String?
+    private(set) var isImportingTimeline = false
 
     /// The AI model selection in the `"<provider>:<model>"` convention (`AIModelSelection`), e.g.
     /// `"mlx:mlx-community/gemma-3-4b-it-4bit"` or `"openrouter:google/gemini-2.5-flash"`. Persisted
@@ -149,7 +151,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// recommended local model (good keywords + descriptions, runs in seconds, no API key, ~5GB peak
     /// under the raised jetsam cap). FastVLM-0.5B remains available as a lighter/lower-quality fallback.
     /// iPad supports only `mlx:` and `openrouter:`; `ollama:` (no daemon on iPad) errors from `suggestAI`.
-    @Published var aiModelText: String =
+    var aiModelText: String =
         UserDefaults.standard.string(forKey: PhotoBrowserViewModel.aiModelDefaultsKey)
         ?? "mlx:mlx-community/gemma-3-4b-it-4bit"
     {
@@ -158,19 +160,19 @@ final class PhotoBrowserViewModel: ObservableObject {
             UserDefaults.standard.set(aiModelText, forKey: Self.aiModelDefaultsKey)
         }
     }
-    @Published private(set) var isSuggestingAI = false
-    @Published var aiStatusMessage: String?
+    private(set) var isSuggestingAI = false
+    var aiStatusMessage: String?
     /// True while a batch run is working through its capture sets. Separate from `isSuggestingAI`
     /// because the two are not the same button and must not disable each other by accident: a batch
     /// run sets this for minutes, and `isSuggestingAI` still belongs to the one request in flight.
-    @Published private(set) var isBatchSuggestingAI = false
+    private(set) var isBatchSuggestingAI = false
     /// How far a batch run has got, for the progress caption. Total is fixed when the run starts.
-    @Published private(set) var batchAICompletedCount = 0
-    @Published private(set) var batchAITotalCount = 0
+    private(set) var batchAICompletedCount = 0
+    private(set) var batchAITotalCount = 0
     /// Whether a batch run also re-describes sets that already have a description. Off by default
     /// and deliberately not persisted: it is a decision about this run, over these files, and a
     /// setting that quietly stayed on would overwrite hand-written prose on the next folder.
-    @Published var batchAIRedescribesDescribedSets = false
+    var batchAIRedescribesDescribedSets = false
     /// The exact image the last `suggestAI()` call sent to the model, shown in the Metadata panel so
     /// a misidentification is diagnosable rather than assumed to be a hallucination.
     ///
@@ -180,17 +182,17 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// teleconverter) then puts things in the model's view that aren't in the user's. Mirrors the
     /// Mac app's `SourceBrowserViewModel.aiEvaluatedImage`, minus its subject-isolation crop paths,
     /// which this app doesn't have.
-    @Published private(set) var aiEvaluatedImage: CGImage?
+    private(set) var aiEvaluatedImage: CGImage?
     /// Filename of the asset `aiEvaluatedImage` was decoded from, shown alongside it so the
     /// preview-vs-sent file distinction above is visible rather than inferred.
-    @Published private(set) var aiEvaluatedImageSourceName: String?
+    private(set) var aiEvaluatedImageSourceName: String?
     /// User-chosen crop override in preview-image-pixel space (the 2048px decode
     /// `extractPreviewAsync` produces), set either by dragging a rectangle on the big preview or by
     /// tapping a Vision-detected subject (`pickSubjectInstance`). When present it replaces
     /// `SubjectIsolationService`'s auto-crop for both the eager "Evaluated" preview and the next
     /// `suggestAI()` call. Cleared on every selection change by `loadEditBuffer()`. Mirrors the Mac
     /// app's `manualSubjectCropRect`.
-    @Published private(set) var manualSubjectCropRect: CGRect?
+    private(set) var manualSubjectCropRect: CGRect?
     /// Handle to the in-flight eager crop-preview computation — cancelled and replaced on every
     /// retrigger (toggle, manual pick, selection change) so a slow Vision request for an abandoned
     /// photo can't clobber `aiEvaluatedImage` after the fact. Mirrors the Mac app's `subjectCropTask`.
@@ -204,7 +206,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// changing photos while on) eagerly computes and shows the crop via `recomputeSubjectCropPreview()`.
     /// Mirrors the Mac app's `subjectIsolationEnabled`; unlike the Mac's drag-only manual override, the
     /// iPad adds tap-to-pick so a touch chooses which subject when Vision finds several (`pickSubjectInstance`).
-    @Published private(set) var subjectIsolationEnabled: Bool =
+    private(set) var subjectIsolationEnabled: Bool =
         UserDefaults.standard.bool(forKey: PhotoBrowserViewModel.subjectIsolationEnabledKey)
     private static let subjectIsolationEnabledKey = "subjectIsolationEnabled"
     private var suggestAITask: Task<Void, Never>?
@@ -218,20 +220,20 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// over-apply species-ID). `UserDefaults`-persisted, toggled per model in `SettingsView`. Defaults
     /// to just FastVLM-0.5B; larger models (gemma-3-4b, OpenRouter) default to `.full` and can be
     /// switched by the user if they turn out to need it. Mirrors the Mac app's `eBirdDisabledModels`.
-    @Published private(set) var compactPromptModels: Set<String> =
+    private(set) var compactPromptModels: Set<String> =
         (UserDefaults.standard.array(forKey: PhotoBrowserViewModel.compactPromptModelsKey) as? [String])
         .map(Set.init) ?? ["mlx:mlx-community/FastVLM-0.5B-bf16"]
     private static let compactPromptModelsKey = "compactPromptModels"
     /// Drives the Settings button label ("Locate…" vs "Change…") and whether Refresh is enabled.
     /// Seeded from the stored bookmark so a relaunch with a previously-located file starts enabled.
-    @Published private(set) var hasTimelineBookmark: Bool =
+    private(set) var hasTimelineBookmark: Bool =
         UserDefaults.standard.data(forKey: PhotoBrowserViewModel.timelineBookmarkKey) != nil
 
     /// Paths (within the currently loaded folder) that have already been through Process & Move at
     /// least once — drives a non-blocking "processed" indicator, the same purely-informational role
     /// as the Mac app's `processedAssetPaths`. Never hides or disables anything: reprocessing must
     /// stay freely available.
-    @Published private(set) var processedAssetPaths: Set<String> = []
+    private(set) var processedAssetPaths: Set<String> = []
     private var processedStore: ProcessedStateStore?
 
     /// Paths of RAW files in the currently loaded folder whose staged sidecar carries
@@ -239,12 +241,12 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// `performSave` consults to keep the marker alive across an ordinary metadata save.
     /// iPadOS can't develop a RAW itself (see that keyword's doc comment), so marking is the whole
     /// of the iPad's part in this: the Mac's iPad import acts on it later.
-    @Published private(set) var developMarkedPaths: Set<String> = []
+    private(set) var developMarkedPaths: Set<String> = []
 
     /// "Select mode" for the grid — while on, tapping a tile toggles `multiSelectedIDs` instead of
     /// changing the preview, and a batch Skip/Un-skip action bar becomes available. Turning it off
     /// always clears the multi-selection rather than leaving stale picks around for next time.
-    @Published var isSelecting = false {
+    var isSelecting = false {
         didSet {
             guard !isSelecting else { return }
             multiSelectedIDs = []
@@ -259,7 +261,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// than in each mutating method covers every path in one place — tap-toggle, shift-range, and
     /// the clear that `isSelecting = false` performs (a no-op, since an empty selection leaves the
     /// preview where it is).
-    @Published private(set) var multiSelectedIDs: Set<PhotoAsset.ID> = [] {
+    private(set) var multiSelectedIDs: Set<PhotoAsset.ID> = [] {
         didSet { previewEarliestMultiSelection() }
     }
 
@@ -339,7 +341,7 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// on local MLX compute, so by default the paid presets are excluded and the free local models get
     /// it (which is also where the accuracy help is most needed). `UserDefaults`-persisted, toggled
     /// per model in `SettingsView`. Mirrors the Mac app's `eBirdDisabledModels`.
-    @Published private(set) var eBirdDisabledModels: Set<String> =
+    private(set) var eBirdDisabledModels: Set<String> =
         (UserDefaults.standard.array(forKey: PhotoBrowserViewModel.eBirdDisabledModelsKey) as? [String])
         .map(Set.init) ?? PhotoBrowserViewModel.defaultEBirdDisabledModels
     private static let eBirdDisabledModelsKey = "eBirdDisabledModels"
@@ -368,7 +370,10 @@ final class PhotoBrowserViewModel: ObservableObject {
     /// The grant covers the whole subtree while active, so subfolder navigation doesn't need its
     /// own start/stop calls — only opening a new root does. (The macOS app never needed this: it
     /// isn't sandboxed the same way, so `SourceBrowserViewModel.openFolder(at:)` skips it entirely.)
-    private var securityScopedRootURL: URL?
+    ///
+    /// `@ObservationIgnored` keeps it a plain stored property: `@Observable` would otherwise make it
+    /// main-actor isolated, and the nonisolated `deinit` below could no longer read it.
+    @ObservationIgnored private var securityScopedRootURL: URL?
 
     deinit {
         securityScopedRootURL?.stopAccessingSecurityScopedResource()
@@ -1089,8 +1094,8 @@ final class PhotoBrowserViewModel: ObservableObject {
 
     /// How many staged edits exist right now, refreshed by `refreshStagedEditCount()` — Settings
     /// shows it so "Clear Staged Edits" says what it would discard before it is pressed.
-    @Published private(set) var stagedEditCount = 0
-    @Published var stagedEditsStatusMessage: String?
+    private(set) var stagedEditCount = 0
+    var stagedEditsStatusMessage: String?
 
     func refreshStagedEditCount() {
         Task {

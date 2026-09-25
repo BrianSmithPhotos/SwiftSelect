@@ -12,7 +12,7 @@ import SwiftSelectCore
 /// static Fit-scaled canvas carrying a `SubjectCropOverlay` — drag a box or tap a subject to set the
 /// manual crop the next AI suggestion is sent, mirroring the Mac.
 struct PreviewPanelView: View {
-    @ObservedObject var viewModel: PhotoBrowserViewModel
+    var viewModel: PhotoBrowserViewModel
 
     @State private var previewImage: CGImage?
     /// Preview scale as a multiple of Fit — see `ZoomableImageView.fitMultiple`. Pure view state

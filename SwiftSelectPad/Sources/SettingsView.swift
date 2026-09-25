@@ -13,7 +13,7 @@ import SwiftSelectCore
 /// button lives here too — the only way to discard staged sidecars, which nothing else ever removes
 /// (a Process & Move reads a draft and leaves it in place).
 struct SettingsView: View {
-    @ObservedObject var viewModel: PhotoBrowserViewModel
+    var viewModel: PhotoBrowserViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var isLocatingTimeline = false
     /// Mirrors of the Keychain-stored API keys, edited via the `SecureField`s below. Loaded in

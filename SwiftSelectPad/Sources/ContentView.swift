@@ -17,7 +17,7 @@ struct ContentView: View {
         var id: Self { self }
     }
 
-    @StateObject private var browser = PhotoBrowserViewModel()
+    @State private var browser = PhotoBrowserViewModel()
     @State private var activeSheet: ActiveSheet?
 
     var body: some View {

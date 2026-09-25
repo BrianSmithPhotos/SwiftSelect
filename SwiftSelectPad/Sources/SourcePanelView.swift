@@ -16,7 +16,7 @@ import SwiftSelectCore
 /// tap recognizer badly enough to break scrolling and normal tap-to-toggle even outside an active
 /// drag, so it was removed rather than tuned further.
 struct SourcePanelView: View {
-    @ObservedObject var viewModel: PhotoBrowserViewModel
+    @Bindable var viewModel: PhotoBrowserViewModel
     @State private var isChoosingFolder = false
 
     private let columns = [GridItem(.adaptive(minimum: 120), spacing: 8)]
