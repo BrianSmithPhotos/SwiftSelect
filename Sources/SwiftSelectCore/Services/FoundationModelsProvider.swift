@@ -20,8 +20,9 @@ import FoundationModels
 ///
 /// Requires the macOS 27 / iOS 27 SDK (Xcode-beta) to build — image input to Foundation Models is
 /// only present there; the whole repo is built with `DEVELOPER_DIR` pointed at Xcode-beta for this
-/// reason (see `scripts/build-app-bundle.sh` and CLAUDE.md). The package's deployment floor is
-/// macOS 27 / iOS 27, so no runtime `#available` check is needed.
+/// reason (see `scripts/build-app-bundle.sh` and CLAUDE.md). At runtime the OS floor is enforced by
+/// the `#available` check below, so an older OS gets a clear `.provider(...)` error rather than a
+/// crash.
 public struct FoundationModelsProvider: AIProvider {
     public init() {}
 
@@ -38,6 +39,7 @@ public struct FoundationModelsProvider: AIProvider {
         + "if you are unsure of the exact species, leave the species field empty rather than guessing."
 
     #if canImport(FoundationModels)
+    @available(macOS 27.0, iOS 27.0, *)
     @Generable
     struct PhotoMetadata {
         @Guide(description: "One plain-English sentence describing the photograph, no markdown.")
@@ -52,11 +54,15 @@ public struct FoundationModelsProvider: AIProvider {
     #endif
 
     /// There's one on-device system model, so the `model` segment (`foundation:apple`) is nominal —
-    /// the real check is whether Foundation Models is usable on this machine right now (Apple
-    /// Intelligence enabled + model downloaded). Surfacing the specific unavailability reason
+    /// the real check is whether Foundation Models is usable on this machine right now (OS floor +
+    /// Apple Intelligence enabled + model downloaded). Surfacing the specific unavailability reason
     /// here means the Metadata panel status caption tells the user what to fix.
     public func ensureVisionCapable(model: String) async throws {
         #if canImport(FoundationModels)
+        guard #available(macOS 27.0, iOS 27.0, *) else {
+            throw AISuggestionError.provider(
+                "Apple Foundation Models image input requires macOS 27 or iOS 27")
+        }
         switch SystemLanguageModel.default.availability {
         case .available:
             return
@@ -76,6 +82,10 @@ public struct FoundationModelsProvider: AIProvider {
         model: String, systemPrompt: String, userPrompt: String, imagePayloads: [String], think: Bool
     ) async throws -> String {
         #if canImport(FoundationModels)
+        guard #available(macOS 27.0, iOS 27.0, *) else {
+            throw AISuggestionError.provider(
+                "Apple Foundation Models image input requires macOS 27 or iOS 27")
+        }
         guard let payload = imagePayloads.first else {
             throw AISuggestionError.provider("No image supplied for Foundation Models request")
         }
@@ -115,6 +125,7 @@ public struct FoundationModelsProvider: AIProvider {
     /// is decoded by `AISuggestionService.parse()` like any other provider's output — the difference
     /// being this JSON is serialized from a value the schema already guaranteed, not scraped from
     /// free-form model text.
+    @available(macOS 27.0, iOS 27.0, *)
     private static func serialize(_ metadata: PhotoMetadata) throws -> String {
         let object: [String: Any] = [
             "description": metadata.description,
@@ -140,6 +151,7 @@ public struct FoundationModelsProvider: AIProvider {
     }
 
     #if canImport(FoundationModels)
+    @available(macOS 27.0, iOS 27.0, *)
     private static func message(for reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
         switch reason {
         case .appleIntelligenceNotEnabled:

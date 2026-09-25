@@ -8,8 +8,9 @@ public enum AIProviderID: String {
     case google
     case mlx
     /// Apple's on-device Foundation Models with `@Generable` guided generation — one system model,
-    /// so the model-name segment is nominal (`foundation:apple`). Image input (which this app always
-    /// sends) needs macOS/iOS 27, the package's deployment floor. See `FoundationModelsProvider`.
+    /// so the model-name segment is nominal (`foundation:apple`). macOS/iOS 26 for text, but image
+    /// input (which this app always sends) needs 26+... in practice 27, gated at runtime by
+    /// `FoundationModelsProvider`. See `FoundationModelsProvider`.
     case foundation
 }
 

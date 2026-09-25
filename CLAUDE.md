@@ -13,7 +13,7 @@ compare against for logic that's being ported (e.g. Timeline JSON parsing, GPS m
 
 ## Stack & Tooling
 
-- macOS 27+ / iOS 27+, Swift 5.10, SwiftUI. `swift build` / `swift run` / `swift test` from the repo root, or
+- macOS 15+ / iOS 27+, Swift 5.10, SwiftUI. `swift build` / `swift run` / `swift test` from the repo root, or
   open `Package.swift` directly in Xcode. `Package.swift` itself declares `swift-tools-version: 6.1`
   (required for `mlx-swift-lm`'s macro target) but pins `swiftLanguageModes: [.v5]`, so the app's own
   code still writes and behaves like Swift 5.10 — the manifest-format bump isn't a language bump.
@@ -77,8 +77,10 @@ directly on iPad. **Build constraint:** Foundation Models image input needs the 
 SDK, which currently ships only in **Xcode-beta** — so the whole repo is now built with that
 toolchain. Run `swift build`/`swift test` with
 `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`, and `scripts/build-app-bundle.sh`
-sets it automatically. The deployment floor is macOS 27 / iOS 27 (raised from 14/17 on 2026-09-25,
-since the app is only used on 27), so no runtime `#available` checks are needed for 27 APIs.
+sets it automatically. The deployment floor is macOS 15 / iOS 27. The Mac floor stays below 27
+on purpose: a macOS 26 or 27 floor opts SwiftUI into new window-sizing behaviour that crashes when
+the `.inspector` pane is dragged (proven with a bare repro, 2026-09-25; a 15 floor is fine). So
+`FoundationModelsProvider` keeps its runtime `#available(macOS 27.0, ...)` gates.
 
 ## File Safety
 

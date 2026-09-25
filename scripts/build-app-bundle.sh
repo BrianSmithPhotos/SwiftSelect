@@ -79,7 +79,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key>
     <string>$BUILD_NUMBER</string>
     <key>LSMinimumSystemVersion</key>
-    <string>27.0</string>
+    <string>15.0</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.photography</string>
     <key>NSHighResolutionCapable</key>

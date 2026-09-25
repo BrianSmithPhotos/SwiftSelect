@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "SwiftSelect",
     platforms: [
-        .macOS("27.0"),
+        .macOS(.v15),
         .iOS("27.0")
     ],
     products: [
