@@ -11,18 +11,48 @@ private final class SpyWriter: WriteBackWriter, @unchecked Sendable {
         let url: URL
     }
 
-    var calls: [Call] = []
+    /// Locked because `@unchecked Sendable` has to be earned once a run has more than one lane.
+    private let lock = NSLock()
+    private var recorded: [Call] = []
+    var calls: [Call] { lock.withLock { recorded } }
     /// Paths to throw on, so a failure can be aimed at one file.
     var failing: Set<String> = []
     var failEverything = false
 
     func writeBack(description: String, keywords: [String],
                    timeoutSeconds: Double, to url: URL) async throws {
-        calls.append(Call(description: description, keywords: keywords,
-                          timeoutSeconds: timeoutSeconds, url: url))
+        lock.withLock {
+            recorded.append(Call(description: description, keywords: keywords,
+                                 timeoutSeconds: timeoutSeconds, url: url))
+        }
         if failEverything || failing.contains(url.path) {
             throw ExifToolError.timedOut
         }
+    }
+}
+
+/// Counts how many writes overlap, which is the only thing that distinguishes lanes from a loop.
+private final class LaneSpy: WriteBackWriter, @unchecked Sendable {
+    private let lock = NSLock()
+    private var inFlight = 0
+    private var peak = 0
+    private var seen: [String] = []
+
+    var highWaterMark: Int { lock.withLock { peak } }
+    var paths: [String] { lock.withLock { seen } }
+
+    func writeBack(description: String, keywords: [String],
+                   timeoutSeconds: Double, to url: URL) async throws {
+        lock.withLock {
+            inFlight += 1
+            peak = max(peak, inFlight)
+            seen.append(url.path)
+        }
+        // Long enough that a second lane will have started before this one finishes, and short
+        // enough not to slow the suite. Without it every write would complete before the next
+        // began and the peak would read 1 whatever the lane count.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        lock.withLock { inFlight -= 1 }
     }
 }
 
@@ -244,6 +274,109 @@ final class WriteBackRunTests: XCTestCase {
         second.close()
 
         XCTAssertEqual(try WriteBackLog.alreadyWritten(in: directory), ["/a.raf", "/b.raf"])
+    }
+
+    // MARK: - helpers
+
+    // MARK: - lanes
+
+    func testByDefaultOnlyOnePhotographIsInFlight() async throws {
+        // The wireless run, and every existing caller: one file at a time, as it always was.
+        let writer = LaneSpy()
+        let log = try WriteBackLog(directory: directory)
+        _ = await run(writer: writer).run(entries: (0..<6).map { entry("/f\($0).raf") }, log: log)
+        log.close()
+
+        XCTAssertEqual(writer.highWaterMark, 1)
+    }
+
+    func testLanesActuallyOverlap() async throws {
+        let writer = LaneSpy()
+        var subject = run(writer: writer)
+        subject.workers = 4
+        let log = try WriteBackLog(directory: directory)
+        _ = await subject.run(entries: (0..<20).map { entry("/f\($0).raf") }, log: log)
+        log.close()
+
+        XCTAssertEqual(writer.highWaterMark, 4)
+    }
+
+    func testLanesNeverExceedTheirNumber() async throws {
+        // A pool that refilled without waiting would climb to the length of the list, which on the
+        // real run is 142,566 exiftool processes at once.
+        let writer = LaneSpy()
+        var subject = run(writer: writer)
+        subject.workers = 3
+        let log = try WriteBackLog(directory: directory)
+        _ = await subject.run(entries: (0..<30).map { entry("/f\($0).raf") }, log: log)
+        log.close()
+
+        XCTAssertLessThanOrEqual(writer.highWaterMark, 3)
+    }
+
+    func testWithLanesEveryPhotographIsStillWrittenExactlyOnce() async throws {
+        let writer = LaneSpy()
+        var subject = run(writer: writer)
+        subject.workers = 5
+        let log = try WriteBackLog(directory: directory)
+        let entries = (0..<40).map { entry("/f\($0).raf", hash: "h\($0)") }
+
+        let outcome = await subject.run(entries: entries, log: log)
+        log.close()
+
+        XCTAssertEqual(outcome.written, 40)
+        XCTAssertEqual(Set(writer.paths).count, 40)
+        XCTAssertEqual(writer.paths.count, 40, "a photograph written twice is a photograph whose "
+                       + "hash moved twice, and the second mapping would be wrong")
+        // The resume set is a set of paths, so lanes finishing out of order costs it nothing.
+        XCTAssertEqual(try WriteBackLog.alreadyWritten(in: directory).count, 40)
+    }
+
+    func testALimitStillAppliesWithLanes() async throws {
+        let writer = LaneSpy()
+        var subject = run(writer: writer)
+        subject.workers = 4
+        let log = try WriteBackLog(directory: directory)
+
+        let outcome = await subject.run(
+            entries: (0..<20).map { entry("/f\($0).raf") }, log: log, limit: 2)
+        log.close()
+
+        XCTAssertEqual(outcome.written, 2)
+        XCTAssertEqual(writer.paths.count, 2)
+    }
+
+    func testAVanishedVolumeStillStopsTheRunWithLanes() async throws {
+        let writer = LaneSpy()
+        var subject = run(writer: writer)
+        subject.workers = 4
+        subject.exists = { _ in false }
+        let log = try WriteBackLog(directory: directory)
+
+        let outcome = await subject.run(entries: (0..<200).map { entry("/f\($0).raf") }, log: log)
+        log.close()
+
+        XCTAssertNotNil(outcome.stopped)
+        // At least the threshold, because that is what trips it, and fewer than the lanes could
+        // have added afterwards: once it stops dispatching it drains what is in flight rather than
+        // cutting an exiftool write short, so the count can overshoot by up to a lane's worth.
+        XCTAssertGreaterThanOrEqual(outcome.missing, WriteBackRun.givingUpAfter)
+        XCTAssertLessThan(outcome.missing, WriteBackRun.givingUpAfter + subject.workers)
+    }
+
+    func testScatteredStaleEntriesDoNotStopTheRunWithLanesEither() async throws {
+        let writer = LaneSpy()
+        var subject = run(writer: writer)
+        subject.workers = 4
+        subject.exists = { !$0.hasSuffix("7.raf") }
+        let log = try WriteBackLog(directory: directory)
+
+        let outcome = await subject.run(entries: (0..<40).map { entry("/f\($0).raf") }, log: log)
+        log.close()
+
+        XCTAssertNil(outcome.stopped)
+        XCTAssertEqual(outcome.written, 36)
+        XCTAssertEqual(outcome.missing, 4)
     }
 
     // MARK: - helpers

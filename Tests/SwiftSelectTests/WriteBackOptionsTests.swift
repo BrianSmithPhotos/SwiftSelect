@@ -33,6 +33,31 @@ final class WriteBackOptionsTests: XCTestCase {
         XCTAssertTrue(options.dryRun)
     }
 
+    func testWorkersDefaultsToOneSoTheWirelessRunIsUnchanged() throws {
+        let options = try XCTUnwrap(WriteBackOptions.parse(arguments: [
+            "SwiftSelect", "writeback", "--manifest", "/m.jsonl", "--log", "/logs",
+        ]))
+        XCTAssertEqual(options.workers, 1)
+    }
+
+    func testWorkersIsRead() throws {
+        let options = try XCTUnwrap(WriteBackOptions.parse(arguments: [
+            "SwiftSelect", "writeback", "--manifest", "/m.jsonl", "--log", "/logs",
+            "--workers", "8",
+        ]))
+        XCTAssertEqual(options.workers, 8)
+    }
+
+    func testWorkersMustBeAPositiveNumber() {
+        // Zero would mean a run that dispatches nothing and reports itself finished.
+        for bad in ["0", "-2", "lots", ""] {
+            XCTAssertThrowsError(try WriteBackOptions.parse(arguments: [
+                "SwiftSelect", "writeback", "--manifest", "/m.jsonl", "--log", "/logs",
+                "--workers", bad,
+            ]), "--workers \(bad) should be refused")
+        }
+    }
+
     func testBothPathsAreRequired() {
         XCTAssertThrowsError(try WriteBackOptions.parse(arguments: ["SwiftSelect", "writeback"]))
         XCTAssertThrowsError(try WriteBackOptions.parse(

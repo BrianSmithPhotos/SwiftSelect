@@ -42,6 +42,7 @@ enum WriteBackCommand {
         say("\(todo.count) to write, \(gibibytes(bytes)) - and the same again read back, "
             + "because exiftool rewrites a file rather than editing it")
         if let limit = options.limit { say("stopping after \(limit), as asked") }
+        if options.workers > 1 { say("\(options.workers) photographs in flight at once") }
         if !quiet.windows.isEmpty { say("quiet hours: \(options.quiet ?? "")") }
         if options.dryRun { say("dry run: nothing will be written") }
         guard !todo.isEmpty else {
@@ -49,7 +50,8 @@ enum WriteBackCommand {
             return 0
         }
 
-        let run = WriteBackRun(writer: ExifToolClient(), quiet: quiet, dryRun: options.dryRun)
+        let run = WriteBackRun(writer: ExifToolClient(), quiet: quiet, dryRun: options.dryRun,
+                               workers: options.workers)
         let outcome = await run.run(entries: todo, log: log, limit: options.limit)
 
         say("")

@@ -152,14 +152,18 @@ public struct WriteBackOptions: Equatable {
     public let quiet: String?
     public let dryRun: Bool
     public let limit: Int?
+    /// Photographs in flight at once. One unless asked, because on Wi-Fi lanes buy 13% and on a
+    /// wire they buy about half the run - see `WriteBackRun.workers`.
+    public let workers: Int
 
     public init(manifest: String, logDirectory: String, quiet: String? = nil,
-                dryRun: Bool = false, limit: Int? = nil) {
+                dryRun: Bool = false, limit: Int? = nil, workers: Int = 1) {
         self.manifest = manifest
         self.logDirectory = logDirectory
         self.quiet = quiet
         self.dryRun = dryRun
         self.limit = limit
+        self.workers = workers
     }
 
     /// nil when this is an ordinary launch - a double-clicked .app gets argv it never asked for,
@@ -176,7 +180,7 @@ public struct WriteBackOptions: Equatable {
             case "--dry-run":
                 dryRun = true
                 index += 1
-            case "--manifest", "--log", "--quiet", "--limit":
+            case "--manifest", "--log", "--quiet", "--limit", "--workers":
                 guard index + 1 < arguments.count else {
                     throw WriteBackOptionsError.missingValue(argument)
                 }
@@ -200,17 +204,28 @@ public struct WriteBackOptions: Equatable {
             }
             limit = value
         }
+        var workers = 1
+        if let text = values["--workers"] {
+            guard let value = Int(text), value > 0 else {
+                throw WriteBackOptionsError.notACount(text)
+            }
+            workers = value
+        }
         return WriteBackOptions(manifest: manifest, logDirectory: log,
-                                quiet: values["--quiet"], dryRun: dryRun, limit: limit)
+                                quiet: values["--quiet"], dryRun: dryRun, limit: limit,
+                                workers: workers)
     }
 
     public static let usage = """
-        usage: SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N] [--dry-run]
+        usage: SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N]
+                                    [--workers N] [--dry-run]
 
           --manifest  the JSONL from `swiftphotolog writeback`
           --log       directory for writeback-done.jsonl and writeback-failed.jsonl
           --quiet     windows to stay off the NAS in, e.g. 07:00-08:30,17:00-21:30
           --limit     stop after N photographs, for a first run against a few
+          --workers   photographs in flight at once, default 1. Worth turning up on a wired
+                      link and not on Wi-Fi, where the link is the wall
           --dry-run   say what would be written and write nothing
         """
 }
