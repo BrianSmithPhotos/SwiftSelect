@@ -41,15 +41,16 @@ struct ZoomableImageView: NSViewRepresentable {
         scrollView.onFitMultipleChange = { multiple in
             // AppKit reports this from inside its own layout pass, which is also SwiftUI's view
             // update on the first run — writing the binding synchronously there trips "Modifying
-            // state during view update". One hop to the next runloop turn is enough.
-            DispatchQueue.main.async {
+            // state during view update". A main-actor Task runs after that pass finishes, which is
+            // enough.
+            Task { @MainActor in
                 guard abs(fitMultiple - multiple) > ZoomScrollView.scaleComparisonEpsilon else { return }
                 fitMultiple = multiple
             }
         }
         scrollView.onCenterChange = { point in
-            // Same one-runloop-turn hop, and for the same reason, as the scale binding above.
-            DispatchQueue.main.async {
+            // Same deferral, and for the same reason, as the scale binding above.
+            Task { @MainActor in
                 guard abs(center.x - point.x) > ZoomScrollView.scaleComparisonEpsilon
                     || abs(center.y - point.y) > ZoomScrollView.scaleComparisonEpsilon
                 else { return }
@@ -57,14 +58,14 @@ struct ZoomableImageView: NSViewRepresentable {
             }
         }
         scrollView.onVisibleImageFrameChange = { frame in
-            // Same one-runloop-turn hop, and for the same reason, as the two bindings above.
-            DispatchQueue.main.async {
+            // Same deferral, and for the same reason, as the two bindings above.
+            Task { @MainActor in
                 guard visibleImageFrame != frame else { return }
                 visibleImageFrame = frame
             }
         }
         scrollView.onResetRequested = {
-            DispatchQueue.main.async { fitMultiple = 1 }
+            Task { @MainActor in fitMultiple = 1 }
         }
         // Deferred rather than applied here: Fit can't be computed until there's a laid-out pane to
         // measure against, so the scroll view applies this on its first real layout pass.

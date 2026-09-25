@@ -170,7 +170,7 @@ struct SourcePanelView: View {
     /// edge, so a second tap retries rather than doing nothing.
     private func presentFolderPicker() {
         isChoosingFolder = false
-        DispatchQueue.main.async { isChoosingFolder = true }
+        Task { @MainActor in isChoosingFolder = true }
     }
 }
 

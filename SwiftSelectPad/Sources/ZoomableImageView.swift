@@ -24,8 +24,8 @@ struct ZoomableImageView: UIViewRepresentable {
         scrollView.onFitMultipleChange = { multiple in
             // Reported from inside UIKit's layout pass, which on the first run is also SwiftUI's
             // view update — writing the binding synchronously there trips "Modifying state during
-            // view update". One hop to the next runloop turn is enough.
-            DispatchQueue.main.async {
+            // view update". A main-actor Task runs after that pass finishes, which is enough.
+            Task { @MainActor in
                 guard abs(fitMultiple - multiple) > ZoomScrollView.scaleComparisonEpsilon else { return }
                 fitMultiple = multiple
             }
