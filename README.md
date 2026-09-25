@@ -22,8 +22,8 @@ Two more that are worth knowing exist:
 - [`exiftool`](https://exiftool.org/) on `PATH` (`brew install exiftool`) — all metadata read/write
   goes through it, same as the Python sibling app.
 - Optional, for AI-assisted suggestions: a running [Ollama](https://ollama.com) server with a
-  vision-capable model, and/or an [OpenRouter](https://openrouter.ai) API key (see
-  `docs/SPEC.md` §6). A third, native in-process MLX backend (`mlx-swift-lm`, no server/API key
+  vision-capable model, and/or an [OpenRouter](https://openrouter.ai) or [Google Gemini](https://ai.google.dev) API key
+  (see `docs/SPEC.md` §6). A third, native in-process MLX backend (`mlx-swift-lm`, no server/API key
   needed) is also available — see `docs/MLX_PROVIDER.md`. If a model is already downloaded via
   [oMLX](https://github.com/BrianSmithPhotos/omlx)'s model manager (its downloader is the more
   robust of the two), `MLXModelRegistry` picks it up straight from oMLX's local store instead of
@@ -35,10 +35,10 @@ Two more that are worth knowing exist:
   bodies today): [Adobe DNG Converter](https://helpx.adobe.com/camera-raw/using/adobe-dng-converter.html).
   Without it those files develop at the newest decoder they themselves offer — see `docs/SPEC.md` §5
   "RAW develop".
-- Both API keys are entered in Settings (Cmd+,) > API Keys, where they're stored in the macOS
-  Keychain via `APIKeyStore` — this is the reliable path for GUI-launched builds (Xcode's Run
+- API keys are entered in Settings (Cmd+,) > API Keys, where they are stored in iCloud Keychain
+  via `APIKeyStore`, so a key entered on the Mac also appears on the iPad — this is the reliable path for GUI-launched builds (Xcode's Run
   button, Finder, Dock), none of which inherit a shell's `.zshrc` exports. Setting the process
-  environment variable directly (`EBIRD_API_KEY` / `OPENROUTER_API_KEY`) still works and takes
+  environment variable directly (`EBIRD_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY`) still works and takes
   precedence over the Keychain, which is convenient for `swift run`/terminal debugging.
 
 ## Getting started
@@ -109,9 +109,9 @@ Past the skeleton stage — the core ingest workflow from `docs/SPEC.md` works e
   (Adobe DNG Converter, optional). The derivative stages in Application Support — never on the SD
   card — and carries a decoder-honest `RAW9`/`RAW8` token into its filename and keywords. On iPad,
   which can't write a DNG, the action instead marks the file for the Mac's import to develop.
-- **AI-assisted suggestions** (§6): pluggable provider interface with three backends — local
-  Ollama, cloud OpenRouter, and a native in-process MLX backend (`mlx-swift-lm`, see
-  `docs/MLX_PROVIDER.md`) — vision pre-check, retry-with-crop fallback, and group-aware
+- **AI-assisted suggestions** (§6): pluggable provider interface with five backends — local
+  Ollama, cloud OpenRouter, the Google Gemini API directly, a native in-process MLX backend
+  (`mlx-swift-lm`, see `docs/MLX_PROVIDER.md`), and Apple Foundation Models — vision pre-check, retry-with-crop fallback, and group-aware
   description/keyword application. Wildlife/plant identification is improved beyond the base spec
   via a "Crop to Subject" toggle (crops to `SubjectIsolationService`'s Vision-detected subject
   before sending, or a user-drawn rectangle on the preview overriding it — see the toggle's doc
@@ -142,8 +142,8 @@ Past the skeleton stage — the core ingest workflow from `docs/SPEC.md` works e
   stable identity across rebuilds, built via `xcodebuild` so mlx-swift-lm's Metal shaders compile
   correctly) that can be pinned to the Dock — not a substitute for `swift run` during day-to-day
   development, just the way to get a Dock-launchable build.
-- API keys (eBird, OpenRouter) resolve from the process environment first, then fall back to the
-  macOS Keychain via `APIKeyStore`, with a Settings (Cmd+,) > API Keys section to store them —
+- API keys (eBird, OpenRouter, Gemini) resolve from the process environment first, then fall back to
+  iCloud Keychain via `APIKeyStore`, shared with the iPad, with a Settings (Cmd+,) > API Keys section to store them —
   fixes GUI-launched builds (Xcode Run button, Finder, Dock) never seeing shell-exported env vars.
 
 Not yet built: a notarized/Developer ID-signed `.app` for distributing beyond this machine, and the

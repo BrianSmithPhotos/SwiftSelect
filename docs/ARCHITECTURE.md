@@ -622,8 +622,9 @@ array so that splitting a merged set apart cannot discard an unsaved metadata ed
 Mirror the reference app's split: a small `AIProvider` protocol (async chat/vision call, given an
 image + prompt, returning parsed suggestions) with concrete implementations per backend. Prompting
 and response-parsing logic lives in one shared place and stays backend-agnostic; adding a backend
-means adding one new type conforming to `AIProvider`. Four backends exist: `OllamaProvider` (local
-HTTP daemon), `OpenRouterProvider` (cloud HTTP), `MLXNativeProvider` (native in-process
+means adding one new type conforming to `AIProvider`. Five backends exist: `OllamaProvider` (local
+HTTP daemon), `OpenRouterProvider` (cloud HTTP), `GoogleProvider` (the Gemini API through its
+OpenAI-compatible endpoint, billed to the user's own Google account), `MLXNativeProvider` (native in-process
 inference via `mlx-swift-lm`, no server/daemon/Python involved — see `docs/MLX_PROVIDER.md`), and
 `FoundationModelsProvider` (Apple on-device Foundation Models via `@Generable` guided generation).
 
@@ -634,7 +635,7 @@ value, which it serializes to JSON to cross the shared `chat -> String` seam unc
 the typed `species` field), and `AISuggestionResult.species` carries the field into the iPad's eBird
 `attachScientificNames` binomial lookup. It requires the macOS 27 / iOS 27 SDK (Xcode-beta) to build
 because Foundation Models image input is only there; the OS floor is enforced at runtime via
-`#available`, so the other three backends still work below 27. See CLAUDE.md "Hardware & model notes"
+`#available`, so the other backends still work below 27. See CLAUDE.md "Hardware & model notes"
 for the toolchain constraint.
 
 `SourceBrowserViewModel.eBirdDisabledModels` gates the eBird candidate-species prompt addition
@@ -644,7 +645,7 @@ since it costs nothing extra there, but it's added input-token cost on a paid Op
 a few flagship models default to off. Deliberately not a general model-management system: it's a `Set`
 checked against `AIModelSelection.presets`, nothing more.
 
-`OpenRouterProvider`'s API key resolves via `APIKeyStore` (below) rather than reading
+`OpenRouterProvider`'s and `GoogleProvider`'s API keys resolve via `APIKeyStore` (below) rather than reading
 `ProcessInfo` directly.
 
 ## Batch AI suggestions
@@ -753,8 +754,8 @@ signing context re-prompt forever; deleting them and re-saving from the current 
 makes that bundle the owner, and an owner reads its own items without any prompt.
 
 `service` is a `var` rather than a `let` for one reason: **tests must not touch the real items.**
-`EBirdSpeciesListServiceTests` and `OpenRouterProviderTests` need `resolve`'s Keychain fallback to
-find nothing, and until 2026-08-11 they achieved that by deleting the real item in `setUp` and
+`EBirdSpeciesListServiceTests`, `OpenRouterProviderTests` and `GoogleProviderTests` need `resolve`'s
+Keychain fallback to find nothing, and until 2026-08-11 they achieved that by deleting the real item in `setUp` and
 saving it back in `tearDown`. That re-created it through `SecItemAdd`, whose default ACL makes the
 calling process the sole owner — the test binary, not the app — so the app prompted on its next
 read, once per suite run, which reads as once per build. The restore path was also a data-loss

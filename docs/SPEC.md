@@ -502,8 +502,9 @@ default settings, the point being Apple's engine applied to the file as the came
   subject is under the finger (`SubjectIsolationService.subjectInstanceRect`), so a touch can choose
   between several subjects — the "Reset to Auto Crop" button reverts. See `docs/ARCHITECTURE.md`
   "eBird species-list cache".
-- **iPad divergence:** two providers only — native on-device MLX (`mlx:`) and OpenRouter
-  (`openrouter:`); Ollama's daemon can't run on iPad. Subject isolation ("Crop to Subject") now
+- **iPad divergence:** every provider except Ollama, whose daemon can't run on iPad: on-device MLX
+  (`mlx:`) and Foundation Models (`foundation:`), plus cloud OpenRouter (`openrouter:`) and Google
+  (`google:`). Subject isolation ("Crop to Subject") now
   works on iPad too — the toggle lives in the metadata sheet, and the big preview swaps its zoomable
   scroll view for a static Fit canvas whose overlay takes a drag-to-box crop or a tap-to-pick subject
   (see the "Crop to Subject" bullet above); off, the AI image is sent full-frame. On-device MLX needs
@@ -512,8 +513,9 @@ default settings, the point being Apple's engine applied to the file as the came
   **gemma-3-4b** (good keywords + descriptions in seconds). Small models (FastVLM-0.5B) use a
   `.compact` prompt profile — no copyable JSON keyword example, and species-ID instructions gated on
   the on-device scene-triage category — selected per-model (`PhotoBrowserViewModel.compactPromptModels`,
-  toggled in Settings); larger models keep the full prompt. OpenRouter + eBird API keys are entered in
-  the iPad Settings sheet (Keychain via `APIKeyStore`), since shell env vars don't reach an installed app.
+  toggled in Settings); larger models keep the full prompt. OpenRouter, Gemini and eBird API keys live in
+  iCloud Keychain via `APIKeyStore`, so keys entered on the Mac appear in the iPad Settings sheet too;
+  shell env vars don't reach an installed app.
 - **iPad eBird divergence (binomial via local lookup):** the eBird candidate list is wired in, but the
   iPad sends **common names only** (halves the prompt for the small model) and, since small models don't
   reliably reproduce a Latin binomial (they omitted it, or on a stuck ID grabbed the alphabetically-first
