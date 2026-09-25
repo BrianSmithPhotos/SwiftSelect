@@ -520,7 +520,9 @@ final class SourceBrowserViewModel: ObservableObject {
             do {
                 async let assetsTask = loader.loadAssets(in: folderURL)
                 async let subfoldersTask = folderBrowser.subfolders(of: folderURL)
-                let (assets, folders) = try await (assetsTask, subfoldersTask)
+                var (assets, folders) = try await (assetsTask, subfoldersTask)
+                let scan = (try? await exifTool.readFolderScan(at: assets.map(\.url))) ?? .init()
+                applyCaptions(scan.captions, to: &assets)
                 skippedPaths = await skippedAssetPaths(inFolder: folderURL)
                 processedAssetPaths = await loadProcessedAssetPaths(inFolder: folderURL)
                 discardSpentDerivatives(
@@ -531,7 +533,7 @@ final class SourceBrowserViewModel: ObservableObject {
                 let derived = rawDerivedStore?.derivedAssets(forOriginals: assets) ?? []
                 // The camera's own burst/bracket counter lives in the maker notes, and nothing else
                 // can separate a burst from two deliberate presses in the same second.
-                let signals = await groupingSignals(for: assets.map(\.url))
+                let signals = await groupingSignals(for: assets.map(\.url), filling: scan.signals)
                 let allSets = grouping.group(assets + derived, signals: signals)
                 automaticCaptureSets = allSets
                 mergeIDsByAssetPath = await mergeIDs(inFolder: folderURL)
@@ -566,12 +568,23 @@ final class SourceBrowserViewModel: ObservableObject {
     /// Written as a fill-in rather than a choice of reader so one unreadable file is handled the
     /// same way as a whole platform. Still best-effort: a file neither can read stays absent, and
     /// grouping treats it as unknown rather than as a boundary.
-    private func groupingSignals(for urls: [URL]) async -> [URL: CaptureSignals] {
-        var signals = (try? await exifTool.readGroupingSignals(at: urls)) ?? [:]
+    private func groupingSignals(
+        for urls: [URL], filling exifToolSignals: [URL: CaptureSignals]
+    ) async -> [URL: CaptureSignals] {
+        var signals = exifToolSignals
         let missing = urls.filter { signals[$0] == nil }
         guard !missing.isEmpty else { return signals }
         for (url, native) in await OlympusMakerNoteReader.signals(at: missing) { signals[url] = native }
         return signals
+    }
+
+    /// ImageIO's scan reads the caption back empty on camera-original JPEGs, so the folder-load
+    /// exiftool pass supplies it; without this the description only appears once a photo is
+    /// selected and read individually.
+    private func applyCaptions(_ captions: [URL: String], to assets: inout [PhotoAsset]) {
+        for index in assets.indices {
+            if let caption = captions[assets[index].url] { assets[index].descriptionText = caption }
+        }
     }
 
     /// Hides every member of `captureSet` from the active view and persists that choice so it

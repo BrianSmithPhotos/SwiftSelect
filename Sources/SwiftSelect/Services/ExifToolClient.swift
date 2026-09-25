@@ -105,23 +105,33 @@ struct ExifToolClient: MetadataWriter {
     ///
     /// `-u` is what makes the interval-shooting counter readable at all: exiftool has no name for
     /// Olympus CameraSettings `0x0605` and suppresses unnamed tags without it.
+    ///
+    /// `Caption-Abstract` rides along because ImageIO reads it back empty on camera-original
+    /// JPEGs, and this pass already visits every file at folder load.
     private static let groupingArguments = [
         "-j", "-s", "-n", "-u",
         "-DriveMode", "-Olympus_CameraSettings_0x0605", "-StackedImage",
-        "-ArtFilterEffect", "-PictureMode", "-ExposureCompensation",
+        "-ArtFilterEffect", "-PictureMode", "-ExposureCompensation", "-Caption-Abstract",
     ]
 
     /// Five tags is a fraction of a full read's output, so this runs in much larger chunks than
     /// `readMetadata(at:)` — a folder of several hundred frames costs only a handful of launches.
     private static let groupingChunkSize = 250
 
-    /// Reads the maker-note signals `CaptureGroupingService` groups by, for a whole folder at once.
+    /// What one folder-load pass learns about each file: the maker-note signals
+    /// `CaptureGroupingService` groups by, and any non-empty caption.
+    struct FolderScan {
+        var signals: [URL: CaptureSignals] = [:]
+        var captions: [URL: String] = [:]
+    }
+
+    /// Reads a whole folder's `FolderScan` at once.
     ///
     /// Best-effort throughout: a file exiftool couldn't read is simply absent from the result, and
     /// grouping falls back to the timestamp gap for it. There is no per-file retry the way
     /// `readMetadata(at:)` has one — a missing signal degrades grouping, it doesn't fail a save.
-    func readGroupingSignals(at urls: [URL]) async throws -> [URL: CaptureSignals] {
-        var signals: [URL: CaptureSignals] = [:]
+    func readFolderScan(at urls: [URL]) async throws -> FolderScan {
+        var scan = FolderScan()
         for chunk in stride(from: 0, to: urls.count, by: Self.groupingChunkSize).map({
             Array(urls[$0..<min($0 + Self.groupingChunkSize, urls.count)])
         }) {
@@ -130,10 +140,13 @@ struct ExifToolClient: MetadataWriter {
             else { continue }
             for entry in entries {
                 guard let sourceFile = entry["SourceFile"] as? String else { continue }
-                signals[URL(fileURLWithPath: sourceFile)] = Self.groupingSignals(from: entry)
+                let url = URL(fileURLWithPath: sourceFile)
+                scan.signals[url] = Self.groupingSignals(from: entry)
+                let caption = Self.text(entry["Caption-Abstract"])
+                if !caption.isEmpty { scan.captions[url] = caption }
             }
         }
-        return signals
+        return scan
     }
 
     static func groupingSignals(from entry: [String: Any]) -> CaptureSignals {

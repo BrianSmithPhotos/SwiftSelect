@@ -262,7 +262,7 @@ final class OlympusMakerNoteReaderTests: XCTestCase {
             .filter { ["jpg", "jpeg", "orf", "ori"].contains($0.pathExtension.lowercased()) }
         try XCTSkipIf(files.isEmpty, "no camera frames in \(path!)")
 
-        let exifTool = try await ExifToolClient().readGroupingSignals(at: files)
+        let exifTool = try await ExifToolClient().readFolderScan(at: files).signals
 
         for file in files {
             XCTAssertEqual(

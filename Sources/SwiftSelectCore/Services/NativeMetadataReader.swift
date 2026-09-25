@@ -26,9 +26,12 @@ public enum NativeMetadataError: Error {
 /// directly — the `2:120` entry is present with the right value; `exiftool`'s own read agrees).
 /// Both `CGImageSourceCopyPropertiesAtIndex`'s IPTC dictionary and
 /// `CGImageMetadataCreateFromXMPData`'s `dc:description` come back empty; byline/copyright/keywords
-/// in the same file read correctly. `SourceBrowserViewModel.loadArtFilterTokenIfNeeded()` papers
-/// over this the same way it already does for maker-note fields: one lazy `exiftool` read per
-/// selected asset corrects `descriptionText` if this reader got it wrong.
+/// in the same file read correctly. On the Mac, the folder-load `exiftool` pass
+/// (`ExifToolClient.readFolderScan(at:)`) supplies the caption instead, and
+/// `SourceBrowserViewModel.loadArtFilterTokenIfNeeded()` still corrects it per selected asset for
+/// anything that pass didn't cover. Removing either the camera's blank (32 zero bytes) EXIF
+/// `ImageDescription` or the IIM keywords makes ImageIO read the caption again; the exact rule is
+/// unknown.
 ///
 /// macOS 27 (Golden Gate, 2026) note: Core Image RAW 9 overhauled `CIRAWFilter`'s demosaic/denoise
 /// quality, but `extractPreview` below doesn't go through `CIRAWFilter`, so RAW 9 has no effect on

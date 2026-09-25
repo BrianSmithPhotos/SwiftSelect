@@ -370,4 +370,20 @@ final class ExifToolClientWriteTests: XCTestCase {
         let metadata = try await client.readMetadata(at: url)
         XCTAssertEqual(metadata["XMP-dc:Description"] as? String, caption)
     }
+
+    /// The folder-load pass carries the caption, because ImageIO's scan reads it back empty on
+    /// camera-original JPEGs. A file with no caption is absent rather than an empty string.
+    func testFolderScanReadsCaptions() async throws {
+        let described = try makeTempFile()
+        let blank = try makeTempFile()
+        let client = ExifToolClient()
+        try await client.write(
+            title: nil, description: "Māori café", keywords: [], gps: nil, subjectDistance: nil,
+            to: described)
+
+        let scan = try await client.readFolderScan(at: [described, blank])
+
+        XCTAssertEqual(scan.captions[described], "Māori café")
+        XCTAssertNil(scan.captions[blank])
+    }
 }

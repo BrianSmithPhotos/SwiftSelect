@@ -448,9 +448,10 @@ as possible:
   tag. Chunk large batches so one invocation's runtime/output stays bounded.
 - **Narrow reads**: when only a handful of tags are wanted, name them (`-DriveMode -StackedImage
   ...`) and add `-n` for the camera's raw numbers rather than exiftool's prose. Output shrinks
-  enough to justify a much larger chunk size — `readGroupingSignals(at:)` reads a whole folder's
+  enough to justify a much larger chunk size — `readFolderScan(at:)` reads a whole folder's
   capture-grouping signals in a couple of launches, which is what makes running it on every folder
-  load affordable. The signals it reads live in Olympus maker notes, which ImageIO exposes no
+  load affordable. It also carries `Caption-Abstract`, because ImageIO reads that back empty on
+  camera-original JPEGs; without it the Description only appeared once each photo was selected. The signals it reads live in Olympus maker notes, which ImageIO exposes no
   dictionary for at all, so the iPad reads the same five tags out of the file's bytes instead
   (`OlympusMakerNoteReader`). Both apps have to wire it in separately, since they are separate
   projects with separate view models: `SourceBrowserViewModel.groupingSignals(for:)` fills in with
