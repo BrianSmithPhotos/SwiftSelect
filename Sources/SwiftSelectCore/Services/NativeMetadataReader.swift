@@ -20,18 +20,25 @@ public enum NativeMetadataError: Error {
 /// only reliable source for those, so this reader is a prototype for the *standard* EXIF/IPTC/GPS
 /// field set, not a full `ExifToolClient` replacement yet.
 ///
-/// Second known gap, confirmed against a real OM SYSTEM camera JPEG (not reproducible with a bare
-/// synthetic fixture): ImageIO can fail to read back `Caption-Abstract`/description on these files
-/// even when the on-disk IPTC bytes are correct (checked by parsing the raw IPTC IIM dataset
-/// directly — the `2:120` entry is present with the right value; `exiftool`'s own read agrees).
-/// Both `CGImageSourceCopyPropertiesAtIndex`'s IPTC dictionary and
-/// `CGImageMetadataCreateFromXMPData`'s `dc:description` come back empty; byline/copyright/keywords
-/// in the same file read correctly. On the Mac, the folder-load `exiftool` pass
+/// Second gap, and it now has an answer. On a real OM SYSTEM camera JPEG, ImageIO read back an
+/// empty `Caption-Abstract`/description even though the on-disk IPTC bytes were correct (checked by
+/// parsing the raw IPTC IIM dataset directly — the `2:120` entry is present with the right value;
+/// `exiftool`'s own read agrees). Both `CGImageSourceCopyPropertiesAtIndex`'s IPTC dictionary and
+/// `CGImageMetadataCreateFromXMPData`'s `dc:description` came back empty; byline/copyright/keywords
+/// in the same file read correctly.
+///
+/// The rule, proven 2026-09-25: ImageIO merges `IFD0:ImageDescription`, `IPTC:Caption-Abstract` and
+/// `XMP-dc:Description` into one description, and the blank field wins. The camera writes a
+/// present-but-blank (32 zero bytes) EXIF `ImageDescription` into every JPEG, so that blank vetoed
+/// the caption the other two carried. Two copies of one file differing only in that field read back
+/// `""` and the caption. `ExifToolClient` now writes all three, which closes it — and matters most
+/// on the iPad, which reads only through this reader. It is not reproducible with a bare synthetic
+/// fixture, because `exiftool` deletes the tag rather than leaving it present and empty.
+///
+/// For files written before that fix, the Mac's folder-load `exiftool` pass
 /// (`ExifToolClient.readFolderScan(at:)`) supplies the caption instead, and
 /// `SourceBrowserViewModel.loadArtFilterTokenIfNeeded()` still corrects it per selected asset for
-/// anything that pass didn't cover. Removing either the camera's blank (32 zero bytes) EXIF
-/// `ImageDescription` or the IIM keywords makes ImageIO read the caption again; the exact rule is
-/// unknown.
+/// anything that pass didn't cover.
 ///
 /// macOS 27 (Golden Gate, 2026) note: Core Image RAW 9 overhauled `CIRAWFilter`'s demosaic/denoise
 /// quality, but `extractPreview` below doesn't go through `CIRAWFilter`, so RAW 9 has no effect on

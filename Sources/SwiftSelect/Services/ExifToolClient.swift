@@ -288,6 +288,21 @@ struct ExifToolClient: MetadataWriter {
         }
         arguments.append("-IPTC:Caption-Abstract=\(description)")
         arguments.append("-XMP-dc:Description=\(description)")
+        // The third copy, and it is the one that decides whether anything else can read the other
+        // two. ImageIO merges IFD0:ImageDescription, IPTC:Caption-Abstract and XMP-dc:Description
+        // into a single description, and the blank field wins: the OM-3 writes an empty
+        // IFD0:ImageDescription into every JPEG, so CGImageSourceCopyPropertiesAtIndex returned ""
+        // for both the IPTC caption and the TIFF description on files whose IPTC and XMP exiftool
+        // showed carrying the caption. Proven 2026-09-25 on real OM-3 JPEGs: filling this field, or
+        // deleting it, made ImageIO read the caption back in both places.
+        //
+        // That matters because the iPad reads only through ImageIO - PhotoAssetLoader into
+        // NativeMetadataReader - so without this line a description written on the Mac is invisible
+        // there. The Mac hid the gap behind its own exiftool correction pass.
+        //
+        // Filled rather than deleted, so the three copies stay in step, which is what Lightroom
+        // does. It also means Photos, Finder and Spotlight show the description.
+        arguments.append("-IFD0:ImageDescription=\(description)")
         // IPTC's accessibility alt text (standard 2021.1) gets the same string: it's the one field
         // in this app whose job is already "describe what's in the picture", which is exactly what
         // alt text is for. Lightroom Classic 12.3+ shows it in its own metadata box, and it's what

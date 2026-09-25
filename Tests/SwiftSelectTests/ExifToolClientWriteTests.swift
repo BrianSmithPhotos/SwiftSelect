@@ -53,6 +53,10 @@ final class ExifToolClientWriteTests: XCTestCase {
         XCTAssertEqual(metadata["XMP-dc:Title"] as? String, "My Title")
         XCTAssertEqual(metadata["IPTC:Caption-Abstract"] as? String, "My description")
         XCTAssertEqual(metadata["XMP-dc:Description"] as? String, "My description")
+        // The third copy. A camera original carries a blank IFD0:ImageDescription and ImageIO lets
+        // it veto the other two, so without this the iPad shows no description at all - see the
+        // comment where it is written, and ReloadReproTests for the proof on a real camera file.
+        XCTAssertEqual(metadata["IFD0:ImageDescription"] as? String, "My description")
         XCTAssertEqual(metadata["XMP-iptcCore:AltTextAccessibility"] as? String, "My description")
         XCTAssertEqual(metadata["IPTC:Keywords"] as? [String], ["mountain", "sunrise"])
         XCTAssertEqual(metadata["XMP-dc:Subject"] as? [String], ["mountain", "sunrise"])
@@ -211,6 +215,11 @@ final class ExifToolClientWriteTests: XCTestCase {
         // Equality alone would pass on a decomposed string in a Swift comparison, which normalises.
         // The count is what catches it: 41 precomposed scalars, 42 decomposed.
         XCTAssertEqual((metadata["XMP-dc:Description"] as? String)?.unicodeScalars.count, 41)
+        // EXIF ImageDescription is nominally ASCII and this is deliberately not: exiftool writes it
+        // as UTF-8 and ImageIO decodes it as UTF-8, measured 2026-09-25 on a real OM-3 JPEG with
+        // Cyrillic and an en-dash in the caption, byte-exact and precomposed both ways.
+        XCTAssertEqual(metadata["IFD0:ImageDescription"] as? String, caption)
+        XCTAssertEqual((metadata["IFD0:ImageDescription"] as? String)?.unicodeScalars.count, 41)
     }
 
     /// The batch path takes the same route, so it gets the same guarantee.

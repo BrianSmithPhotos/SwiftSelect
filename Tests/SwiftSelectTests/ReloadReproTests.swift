@@ -105,18 +105,24 @@ final class ReloadReproTests: XCTestCase {
         XCTAssertEqual(asset.keywords, ["hawk", "post"])
     }
 
-    /// Documents a confirmed ImageIO limitation (see `NativeMetadataReader`'s doc comment): on a
-    /// real OM SYSTEM camera JPEG, `PhotoAssetLoader`'s ImageIO-based scan reads back an empty
-    /// description even though `exiftool` wrote — and independently reads back — the correct
-    /// value. Verified down to the raw IPTC IIM bytes (the `2:120` Caption-Abstract dataset is
-    /// present and correct on disk); this is not a write bug, and not reproducible with a
-    /// synthetic fixture. `SourceBrowserViewModel.loadArtFilterTokenIfNeeded()` is where this gets
-    /// corrected (one `exiftool` read per selected asset, same mechanism already used for
-    /// maker-note fields) — that correction lives one layer up from `PhotoAssetLoader`, so this
-    /// test asserts the gap `PhotoAssetLoader` alone still has, as a regression lock: if this
-    /// starts passing (Apple fixes the ImageIO parsing, or `NativeMetadataReader` changes), the
-    /// ViewModel-level workaround may no longer be necessary.
-    func testSingleFileWriteToRealCameraJPEGThenReload_documentsImageIODescriptionGap() async throws {
+    /// Locks the fix for what used to be an unexplained ImageIO limitation: on a real OM SYSTEM
+    /// camera JPEG, `PhotoAssetLoader`'s ImageIO-based scan read back an empty description even
+    /// though `exiftool` had written — and independently read back — the correct value.
+    ///
+    /// The cause, proven 2026-09-25 on real OM-3 JPEGs: the camera writes a present-but-blank
+    /// `IFD0:ImageDescription` into every JPEG, ImageIO merges that with `IPTC:Caption-Abstract`
+    /// and `XMP-dc:Description` into one description, and the blank field wins — so
+    /// `CGImageSourceCopyPropertiesAtIndex` returned `""` for *both* the IPTC caption and the TIFF
+    /// description. Two copies of one file differing only in that field read back `""` and the
+    /// caption respectively. It is not reproducible with a synthetic fixture, because `exiftool`
+    /// deletes the tag rather than leaving it present and empty, which is why this test needs the
+    /// card.
+    ///
+    /// `ExifToolClient` now writes the field, so the description survives to ImageIO and therefore
+    /// to the iPad, which reads only through that path.
+    /// `SourceBrowserViewModel.loadArtFilterTokenIfNeeded()`'s correction pass stays: it still
+    /// covers card files written before this fix.
+    func testSingleFileWriteToRealCameraJPEGThenReload_readsTheDescriptionThroughImageIO() async throws {
         let jpegCardURL = URL(fileURLWithPath: "/Volumes/OM SYSTEM/DCIM/105OMSYS/F1052228.JPG")
         guard FileManager.default.fileExists(atPath: jpegCardURL.path) else {
             throw XCTSkip("SD card not mounted")
@@ -138,14 +144,16 @@ final class ReloadReproTests: XCTestCase {
         let loader = PhotoAssetLoader()
         let assets = try await loader.loadAssets(in: sourceDirectory)
         let asset = try XCTUnwrap(assets.first)
-        XCTAssertEqual(asset.descriptionText, "", "ImageIO read this file's Caption-Abstract correctly — if so, NativeMetadataReader's doc comment and loadArtFilterTokenIfNeeded's workaround may no longer be needed.")
+        XCTAssertEqual(asset.descriptionText, description,
+                       "ImageIO read no description back, so the camera's blank IFD0:ImageDescription "
+                       + "is winning again — check ExifToolClient still writes that field.")
     }
 
     /// `saveMetadata(scope: .captureSet(...))` uses the *batched* multi-URL write, not the
     /// single-file one exercised above — reproduces that exact path on a real RAW+JPEG pair, and
-    /// confirms the ImageIO gap above is JPEG-specific: the ORF sibling in the same batch reads
-    /// back correctly.
-    func testBatchedWriteToRAWPlusJPEGPairThenReloadBoth_documentsImageIODescriptionGapOnJPEGOnly() async throws {
+    /// confirms the fix above holds on the batch path too. The ORF sibling never had the problem —
+    /// only JPEG carries the camera's blank `IFD0:ImageDescription` — so it is the control here.
+    func testBatchedWriteToRAWPlusJPEGPairThenReloadBoth_readsBothDescriptionsThroughImageIO() async throws {
         let jpegCardURL = URL(fileURLWithPath: "/Volumes/OM SYSTEM/DCIM/105OMSYS/F1052228.JPG")
         let rawCardURL = URL(fileURLWithPath: "/Volumes/OM SYSTEM/DCIM/105OMSYS/F1052228.ORF")
         guard FileManager.default.fileExists(atPath: jpegCardURL.path),
@@ -176,7 +184,9 @@ final class ReloadReproTests: XCTestCase {
         let assetsByExtension = Dictionary(uniqueKeysWithValues: assets.map { ($0.url.pathExtension.uppercased(), $0) })
 
         XCTAssertEqual(assetsByExtension["ORF"]?.descriptionText, description)
-        XCTAssertEqual(assetsByExtension["JPG"]?.descriptionText, "", "see NativeMetadataReader's doc comment — JPEG-only ImageIO description gap.")
+        XCTAssertEqual(assetsByExtension["JPG"]?.descriptionText, description,
+                       "the JPEG read back empty — the camera's blank IFD0:ImageDescription is "
+                       + "winning again on the batch path.")
         for asset in assets {
             XCTAssertEqual(asset.keywords, ["hawk", "wildlife"], "mismatch for \(asset.url.lastPathComponent)")
         }
