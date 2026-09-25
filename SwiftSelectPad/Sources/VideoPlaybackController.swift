@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Observation
 
 /// Owns the player behind the video preview, and the three values its transport draws from.
 ///
@@ -7,19 +8,24 @@ import Foundation
 /// (docs/ARCHITECTURE.md "Videos"), so the transport talks to this and nothing else. Everything
 /// here is `@MainActor`: the periodic observer publishes on the main queue and the slider writes
 /// back from a gesture, so there is no other thread in the picture.
+///
+/// `@Observable` rather than `ObservableObject`: a view redraws only for the properties it reads,
+/// so the ten-a-second `currentTime` tick no longer invalidates views that only read `isPlaying`.
 @MainActor
-final class VideoPlaybackController: ObservableObject {
+@Observable
+final class VideoPlaybackController {
     /// One player for the life of the pane, reused across clips by replacing its item. A new player
     /// per clip would mean a new `AVPlayerLayer` binding on every selection change.
     let player = AVPlayer()
 
-    @Published private(set) var currentTime: TimeInterval = 0
+    private(set) var currentTime: TimeInterval = 0
     /// Zero until the clip's length is known, and for a clip whose length AVFoundation can't report
     /// — which the view reads as "no transport to draw yet".
-    @Published private(set) var duration: TimeInterval = 0
-    @Published private(set) var isPlaying: Bool = false
+    private(set) var duration: TimeInterval = 0
+    private(set) var isPlaying: Bool = false
 
-    private var timeObserver: Any?
+    /// Bookkeeping only; no view reads it, so it is kept out of observation tracking.
+    @ObservationIgnored private var timeObserver: Any?
 
     /// How far a seek may land from where the slider was let go. Zero tolerance forces a decode from
     /// the previous keyframe, which on a 4K clip read off the card it was shot on takes long enough

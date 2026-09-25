@@ -12,7 +12,7 @@ import SwiftSelectCore
 struct VideoPreviewView: View {
     let url: URL
 
-    @StateObject private var controller = VideoPlaybackController()
+    @State private var controller = VideoPlaybackController()
     @State private var skimFrames: [VideoSkimStrip.Frame] = []
 
     private static let skimFrameCount: Int = 10

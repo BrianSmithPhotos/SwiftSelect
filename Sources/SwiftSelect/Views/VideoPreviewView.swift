@@ -18,7 +18,7 @@ import SwiftSelectCore
 struct VideoPreviewView: View {
     let url: URL
 
-    @StateObject private var controller = VideoPlaybackController()
+    @State private var controller = VideoPlaybackController()
     @State private var skimFrames: [VideoSkimStrip.Frame] = []
 
     /// Ten across the clip: enough to see what happens in it, few enough to sit in one row beside
