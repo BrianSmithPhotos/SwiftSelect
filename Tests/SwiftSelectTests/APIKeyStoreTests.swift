@@ -16,11 +16,14 @@ final class APIKeyStoreTests: XCTestCase {
         super.setUp()
         realService = APIKeyStore.service
         APIKeyStore.service = "photos.briansmith.macphotomaster.tests"
+        // Unsigned test binaries can't reach the synced keychain, so this exercises the local one.
+        APIKeyStore.synchronizes = false
     }
 
     override func tearDown() {
         APIKeyStore.delete(account: account)
         APIKeyStore.service = realService
+        APIKeyStore.synchronizes = true
         super.tearDown()
     }
 

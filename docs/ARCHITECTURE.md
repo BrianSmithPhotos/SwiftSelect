@@ -731,6 +731,15 @@ because a `UserDefaults`-backed secret is a cleartext plist under `~/Library/Pre
 appropriate for API keys — this is a deliberate exception to this doc's general preference for
 storing app state in `UserDefaults`/GRDB rather than the Keychain.
 
+Since 2026-09-24 the keys (now including `GEMINI_API_KEY`) sync through iCloud Keychain: items are
+`kSecAttrSynchronizable` in the access group `U4UCUZRYBD.photos.briansmith.swiftselect`, which both
+the Mac and iPad apps list in `keychain-access-groups`. On macOS that entitlement is only honoured
+when a provisioning profile embedded in the bundle authorizes it, so `build-app-bundle.sh` embeds one
+(see `scripts/README.md`). Keys saved before this were device-only items; the first `read` of each
+copies it into the synced group and deletes the original. `delete` removes both, or the next read
+would copy a cleared key back. `swift test` runs unsigned and cannot reach the synced keychain, so
+`APIKeyStoreTests` sets `APIKeyStore.synchronizes = false`.
+
 The `service` string was `com.briansmithphotos.*` (the app's never-owned pre-2026-07 bundle domain)
 until 2026-07-24, when it was realigned to the current `photos.briansmith.*` bundle ID during a
 deliberate keychain reset — the name shown in the macOS keychain access prompt is this `service`

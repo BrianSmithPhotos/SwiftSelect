@@ -23,3 +23,6 @@ samples/
 # Python bytecode from the scripts/ helpers - generated, never source.
 __pycache__/
 *.pyc
+
+# Machine-local settings (e.g. the provisioning profile path) - a path leaks the username.
+.env

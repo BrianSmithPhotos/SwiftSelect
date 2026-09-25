@@ -15,7 +15,7 @@ BUNDLE_ID="photos.briansmith.swiftselect"
 ICON_SOURCE="icons/AppIcon-1024.png"
 DERIVED_DATA_DIR=".build/xcodebuild-release"
 BUILD_DIR="$DERIVED_DATA_DIR/Build/Products/Release"
-DIST_DIR="dist"
+DIST_DIR="${DIST_DIR:-dist}"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 VERSION="0.1"
 BUILD_NUMBER="$(git rev-list --count HEAD)"
@@ -111,7 +111,20 @@ xattr -cr "$APP_BUNDLE"
 # machine, not for distribution. Override for a machine without the
 # certificate; `-` restores ad-hoc signing.
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Apple Development: BRIAN SMITH (M8V275SX93)}"
-codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+
+# API keys live in the iCloud-synced data protection keychain, shared with the iPad app through
+# the keychain-access-groups entitlement. macOS only honours that entitlement when a provisioning
+# profile embedded in the bundle authorizes it, so the profile is required, not optional. Its
+# path is machine-local, so it comes from the gitignored .env rather than this script.
+[ -f .env ] && source .env
+if [ ! -f "${SWIFTSELECT_MAC_PROFILE:-}" ]; then
+    echo "error: SWIFTSELECT_MAC_PROFILE must point at the macOS development profile for $BUNDLE_ID (set it in .env)" >&2
+    exit 1
+fi
+cp "$SWIFTSELECT_MAC_PROFILE" "$APP_BUNDLE/Contents/embedded.provisionprofile"
+
+codesign --force --deep --sign "$CODESIGN_IDENTITY" \
+    --entitlements scripts/SwiftSelect.entitlements "$APP_BUNDLE"
 
 echo "Built $APP_BUNDLE"
 echo "Drag it into /Applications (or straight onto the Dock) to pin it."

@@ -28,6 +28,14 @@ certificate; `CODESIGN_IDENTITY=-` restores ad-hoc signing. Still a development 
 running on this machine, not for distributing to others or passing Gatekeeper's `spctl` assessment
 on a machine where it'd carry a quarantine attribute.
 
+It also embeds a macOS development provisioning profile, which authorizes the
+`keychain-access-groups` entitlement (`scripts/SwiftSelect.entitlements`) that iCloud Keychain
+syncing of the API keys needs. The profile is machine-specific, so its path comes from a gitignored
+`.env` in the repo root: `SWIFTSELECT_MAC_PROFILE="<path to .provisionprofile>"`. The script stops
+with an error if it is missing. The profile expires yearly (current one: 2027-09-24); regenerate it
+in the developer portal for App ID `photos.briansmith.swiftselect` and this Mac. `DIST_DIR`
+overrides the output folder, e.g. to build without replacing a running `dist/` copy.
+
 ## backfill-standard-metadata.sh
 
 Backfills two standard metadata fields into already-organized library photos that

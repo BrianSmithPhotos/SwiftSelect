@@ -25,6 +25,9 @@ targets:
       path: SwiftSelectPad.entitlements
       properties:
         com.apple.developer.kernel.increased-memory-limit: true
+        # Shared with the Mac app so iCloud Keychain syncs the API keys between them - see APIKeyStore.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)photos.briansmith.swiftselect
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: photos.briansmith.swiftselectpad
