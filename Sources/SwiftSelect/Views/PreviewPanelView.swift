@@ -178,6 +178,9 @@ struct PreviewPanelView: View {
 /// reference app's variant strip.
 private struct SelectedImagesStripView: View {
     var viewModel: SourceBrowserViewModel
+    /// Its own state rather than `.scrollPosition(id:)` bound to `selectedAssetID`: that binding is
+    /// two-way, so merely scrolling the strip would change which photo is previewed.
+    @State private var scrollPosition = ScrollPosition(idType: PhotoAsset.ID.self)
 
     private var members: [PhotoAsset] {
         // Both lists, not just the currently-displayed filter — the active preview can be a
@@ -220,12 +223,21 @@ private struct SelectedImagesStripView: View {
                     }
                 }
             }
+            // Gives each tile its ForEach id as a scroll target, which `scrollTo(id:)` needs.
+            .scrollTargetLayout()
             .padding(.top, 4)
             // Top-aligned in a taller-than-content frame (rather than the default vertical
             // centering) so the tiles sit near the top of the strip, leaving clear room below for
             // the horizontal scroll bar instead of it overlapping the tiles' bottom edge — see
             // GitHub issue #5.
             .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .scrollPosition($scrollPosition)
+        // A multi-select strip can be wider than the pane, so the newly active tile (e.g. the end of
+        // a shift-click range) may be off-screen. A nil anchor scrolls only as far as needed.
+        .onChange(of: viewModel.selectedAssetID) { _, id in
+            guard let id else { return }
+            withAnimation { scrollPosition.scrollTo(id: id) }
         }
         .frame(height: 92)
     }
