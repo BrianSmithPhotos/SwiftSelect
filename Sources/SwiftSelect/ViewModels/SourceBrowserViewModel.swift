@@ -866,6 +866,23 @@ final class SourceBrowserViewModel {
         selectedAssetID = id
     }
 
+    /// Arrow key in the grid: acts as a plain click on the tile `offset` places away (a row is the
+    /// column count). Steps from the selected set's representative, since `selectedAssetID` can be
+    /// a non-representative member picked in the filmstrip.
+    func stepGridSelection(by offset: Int) {
+        let visibleIDs = displayedCaptureSets.compactMap { $0.representative?.id }
+        let current = selectedCaptureSet?.representative?.id
+        guard let target = SelectionScope.stepped(from: current, by: offset, in: visibleIDs) else { return }
+        selectTile(target, modifiers: [])
+    }
+
+    /// Arrow key in the filmstrip: previews the next or previous member, as a plain click would.
+    func stepActivePreview(by offset: Int) {
+        guard let target = SelectionScope.stepped(from: selectedAssetID, by: offset, in: variantMemberIDs)
+        else { return }
+        setActivePreview(target)
+    }
+
     /// Whether the filmstrip's ring-selection has been narrowed away from the full scope it
     /// started at — i.e. the user cmd-clicked at least one member out, but not all the way down to
     /// zero (which `toggleVariantSelection` already disallows).

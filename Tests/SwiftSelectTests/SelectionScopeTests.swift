@@ -138,4 +138,36 @@ final class SelectionScopeTests: XCTestCase {
         XCTAssertNil(SelectionScope.earliest(in: visible, selected: []))
         XCTAssertNil(SelectionScope.earliest(in: visible, selected: [path("gone.JPG")]))
     }
+
+    // MARK: - stepped
+
+    func testSteppedMovesByOffsetWithinTheList() {
+        let visible = [path("a.JPG"), path("b.JPG"), path("c.JPG"), path("d.JPG")]
+
+        XCTAssertEqual(SelectionScope.stepped(from: visible[1], by: 1, in: visible), visible[2])
+        XCTAssertEqual(SelectionScope.stepped(from: visible[1], by: -1, in: visible), visible[0])
+        XCTAssertEqual(SelectionScope.stepped(from: visible[0], by: 3, in: visible), visible[3])
+    }
+
+    /// Holding an arrow key past the end stops there rather than wrapping to the other end.
+    func testSteppedClampsAtBothEnds() {
+        let visible = [path("a.JPG"), path("b.JPG"), path("c.JPG")]
+
+        XCTAssertEqual(SelectionScope.stepped(from: visible[2], by: 1, in: visible), visible[2])
+        XCTAssertEqual(SelectionScope.stepped(from: visible[0], by: -1, in: visible), visible[0])
+        // A row down with no tile below lands on the last tile, as in Finder.
+        XCTAssertEqual(SelectionScope.stepped(from: visible[1], by: 4, in: visible), visible[2])
+    }
+
+    /// With nothing selected, or a selection no longer on screen, the first key press starts at the top.
+    func testSteppedStartsAtTheFirstWhenCurrentIsMissing() {
+        let visible = [path("a.JPG"), path("b.JPG")]
+
+        XCTAssertEqual(SelectionScope.stepped(from: nil, by: 1, in: visible), visible[0])
+        XCTAssertEqual(SelectionScope.stepped(from: path("gone.JPG"), by: -1, in: visible), visible[0])
+    }
+
+    func testSteppedIsNilForAnEmptyList() {
+        XCTAssertNil(SelectionScope.stepped(from: path("a.JPG"), by: 1, in: []))
+    }
 }

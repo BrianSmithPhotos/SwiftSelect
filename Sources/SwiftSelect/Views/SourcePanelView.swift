@@ -12,6 +12,12 @@ struct SourcePanelView: View {
     @State private var isChoosingFolder = false
     /// The grid's scroll view width, measured from outside it. See `columnCount(forWidth:)`.
     @State private var gridWidth: CGFloat = 0
+    /// Set by a tile click, so the arrow keys step the grid only after it was last clicked, and a
+    /// text field elsewhere keeps its own arrow keys.
+    @FocusState private var isGridFocused: Bool
+    /// Keeps the selected tile in view as the arrow keys move it. Keyed by capture set, as the
+    /// grid's `ForEach` is.
+    @State private var gridScrollPosition = ScrollPosition(idType: CaptureSet.ID.self)
 
     private static let tileMinimumWidth: CGFloat = 96
     private static let tileSpacing: CGFloat = 8
@@ -42,6 +48,16 @@ struct SourcePanelView: View {
     /// Fills the usable width exactly, as the adaptive grid did, but as a fixed size.
     static func tileSide(forWidth width: CGFloat, columns: Int) -> CGFloat {
         max(tileMinimumWidth, (width - CGFloat(columns - 1) * tileSpacing) / CGFloat(columns))
+    }
+
+    /// Left/right move one tile, up/down one row.
+    private func gridStep(for key: KeyEquivalent) -> Int {
+        switch key {
+        case .leftArrow: -1
+        case .rightArrow: 1
+        case .upArrow: -columns.count
+        default: columns.count
+        }
     }
 
     private var displayedCaptureSets: [CaptureSet] {
@@ -106,6 +122,7 @@ struct SourcePanelView: View {
                                     isSelected: viewModel.multiSelectedIDs.contains(representative.id),
                                     isProcessed: viewModel.isProcessed(captureSet),
                                     onSelect: { modifiers in
+                                        isGridFocused = true
                                         viewModel.selectTile(representative.id, modifiers: modifiers)
                                     }
                                 )
@@ -134,9 +151,27 @@ struct SourcePanelView: View {
                             }
                         }
                     }
+                    .scrollTargetLayout()
                     .padding(.vertical, 4)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
+                .scrollPosition($gridScrollPosition)
+                .onChange(of: viewModel.selectedCaptureSet?.id) { _, id in
+                    guard let id else { return }
+                    withAnimation { gridScrollPosition.scrollTo(id: id) }
+                }
+                .focusable()
+                .focused($isGridFocused)
+                // The selected tile already shows where you are; a ring round the grid adds nothing.
+                .focusEffectDisabled()
+                .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+                    // AppKit flags arrow keys as numeric-pad keys, so test only the modifiers a person
+                    // holds. Shift/cmd-arrow are left alone rather than half-handled.
+                    guard press.modifiers.isDisjoint(with: [.shift, .command, .option, .control])
+                    else { return .ignored }
+                    viewModel.stepGridSelection(by: gridStep(for: press.key))
+                    return .handled
+                }
             }
         }
         .padding()

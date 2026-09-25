@@ -60,4 +60,15 @@ public enum SelectionScope {
     ) -> PhotoAsset.ID? {
         visible.first { selected.contains($0) }
     }
+
+    /// The id `offset` places along `ids` from `current`, for arrow-key stepping through the grid
+    /// (a row is `offset` = column count) or the filmstrip. Clamps at both ends rather than
+    /// wrapping, and starts at the first id when `current` is missing or no longer listed.
+    public static func stepped(
+        from current: PhotoAsset.ID?, by offset: Int, in ids: [PhotoAsset.ID]
+    ) -> PhotoAsset.ID? {
+        guard !ids.isEmpty else { return nil }
+        guard let current, let index = ids.firstIndex(of: current) else { return ids[0] }
+        return ids[min(max(index + offset, 0), ids.count - 1)]
+    }
 }

@@ -181,6 +181,8 @@ private struct SelectedImagesStripView: View {
     /// Its own state rather than `.scrollPosition(id:)` bound to `selectedAssetID`: that binding is
     /// two-way, so merely scrolling the strip would change which photo is previewed.
     @State private var scrollPosition = ScrollPosition(idType: PhotoAsset.ID.self)
+    /// Set by a tile click, so left/right step the strip only after it was last clicked.
+    @FocusState private var isStripFocused: Bool
 
     private var members: [PhotoAsset] {
         // Both lists, not just the currently-displayed filter — the active preview can be a
@@ -200,7 +202,10 @@ private struct SelectedImagesStripView: View {
                         isRingSelected: viewModel.variantSelectedIDs.contains(member.id),
                         isActive: viewModel.selectedAssetID == member.id,
                         isProcessed: viewModel.isProcessed(member),
-                        onPlainSelect: { viewModel.setActivePreview(member.id) },
+                        onPlainSelect: {
+                            isStripFocused = true
+                            viewModel.setActivePreview(member.id)
+                        },
                         onToggleSelect: { viewModel.toggleVariantSelection(member.id) }
                     )
                     // Per-file counterparts to the capture-set actions in `SourcePanelView`: act on
@@ -238,6 +243,16 @@ private struct SelectedImagesStripView: View {
         .onChange(of: viewModel.selectedAssetID) { _, id in
             guard let id else { return }
             withAnimation { scrollPosition.scrollTo(id: id) }
+        }
+        .focusable()
+        .focused($isStripFocused)
+        .focusEffectDisabled()
+        // Same modifier rule as the grid in `SourcePanelView`.
+        .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
+            guard press.modifiers.isDisjoint(with: [.shift, .command, .option, .control])
+            else { return .ignored }
+            viewModel.stepActivePreview(by: press.key == .leftArrow ? -1 : 1)
+            return .handled
         }
         .frame(height: 92)
     }
