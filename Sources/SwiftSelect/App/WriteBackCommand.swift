@@ -67,6 +67,16 @@ enum WriteBackCommand {
             say(String(format: "%d were evicted and had to be fetched first, "
                        + "%.0f s of waiting in total, %.1f s each",
                        outcome.fetched, outcome.fetchSeconds, each))
+            // The point of the line is the disk, not the tidiness: 62,675 woken placeholders held
+            // locally would be about 926 GB against 1.1 TiB free.
+            say("\(outcome.evicted) of them gave their bytes back once the provider had the rewrite"
+                + (outcome.stillLocal > 0
+                   ? ", \(outcome.stillLocal) are still taking up room" : ""))
+            // Said out loud rather than counted: a swallowed refusal once made an eviction step that
+            // gave nothing back at all look like one that worked.
+            if let refusal = outcome.refusal, outcome.stillLocal > 0 {
+                say("the last refusal was: \(refusal)")
+            }
         }
         if !options.dryRun {
             say("each write changed the file, so its hash has changed. "

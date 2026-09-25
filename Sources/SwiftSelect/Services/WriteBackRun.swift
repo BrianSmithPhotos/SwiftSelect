@@ -36,6 +36,14 @@ struct WriteBackRun {
         /// Reported because a fetch is 20 s against exiftool's 0.5 and would otherwise be invisible.
         var fetched = 0
         var fetchSeconds = 0.0
+        /// Fetched placeholders whose bytes this run gave back once the provider had the rewrite.
+        var evicted = 0
+        /// Fetched placeholders still taking up room: the provider never took the rewrite before
+        /// the run ended, or refused to the last. Harmless, and only ever bytes.
+        var stillLocal = 0
+        /// Why the last eviction was refused. Reported because a silently swallowed refusal made a
+        /// completely broken eviction step look like a working one, on 17 files out of 17.
+        var refusal: String?
         /// Why the run stopped early, or nil if it reached the end of the list.
         var stopped: String?
     }
@@ -45,6 +53,24 @@ struct WriteBackRun {
     /// to an unmounted path and reports itself finished. A handful of scattered stale entries - a
     /// file `refile` moved since the manifest was made - will not reach this.
     static let givingUpAfter = 10
+
+    /// How long the run waits at the end for the last uploads to settle before giving up on handing
+    /// those bytes back. The files finishing in the closing lanes have only just been written, and
+    /// measurement put every upload inside 10.6 s of the write, so a minute is generous. Whatever is
+    /// still in flight when it expires stays local, which costs room and nothing else.
+    static let settlingSeconds = 60.0
+
+    /// How long after a write to leave a file alone before asking for its bytes back.
+    ///
+    /// `isUploaded` is not the state of the file, it is the provider's last word about the file, and
+    /// after a local change it keeps saying the old word for a while. Measured across one real
+    /// rewrite: the write landed at 5.2 s and the flag was still `true` until 5.6 s, when the daemon
+    /// noticed and flipped it to `false, uploading`. An eviction asked for inside that window is
+    /// asked for on stale information - and every one of 17 was refused, which is the provider
+    /// protecting a rewrite it had not taken yet. Waiting a few seconds first makes the stale answer
+    /// impossible rather than merely unlikely, and costs nothing, because the eviction is deferred
+    /// anyway and a completion comes round every 2.6 s at eight lanes.
+    static let graceSeconds = 5.0
 
     let writer: WriteBackWriter
     let quiet: QuietHours
@@ -77,6 +103,10 @@ struct WriteBackRun {
     var fetch: (String, Double) async throws -> Double = { path, timeout in
         try await CloudFile.fetch(at: URL(fileURLWithPath: path), timeoutSeconds: timeout)
     }
+    /// Whether the provider has the rewrite yet, and the ask that gives the local bytes back. A
+    /// pair again, for the same reason: the run never needs to know which provider it is talking to.
+    var uploaded: (String) -> Bool = { CloudFile.isUploaded(at: URL(fileURLWithPath: $0)) }
+    var evict: (String) throws -> Void = { try CloudFile.evict(at: URL(fileURLWithPath: $0)) }
     /// Flushed on every line: block buffering makes a four-hour quiet-hours pause look exactly
     /// like a stalled run, which has cost a session before.
     var say: (String) -> Void = { line in
@@ -100,6 +130,10 @@ struct WriteBackRun {
         var completed = 0
         let todo = limit.map { Array(entries.prefix($0)) } ?? entries
         let lanes = max(1, workers)
+        // Placeholders this run woke, waiting for the provider to take the rewrite before their
+        // bytes go back. The time is when the write finished, and it is what `graceSeconds` is
+        // measured from; nothing else about the entry is needed to give bytes back.
+        var awaitingUpload: [(path: String, writtenAt: Date)] = []
 
         await withTaskGroup(of: Attempt.self) { group in
             var next = todo.makeIterator()
@@ -122,6 +156,9 @@ struct WriteBackRun {
                     if let fetchSeconds {
                         outcome.fetched += 1
                         outcome.fetchSeconds += fetchSeconds
+                        // Only what this run woke is put back to sleep. A file whose bytes were
+                        // already here was somebody else's decision, and stays as it was found.
+                        awaitingUpload.append((entry.path, now()))
                     }
                     consecutiveTrouble = 0
                 case let .failed(entry, reason):
@@ -135,6 +172,8 @@ struct WriteBackRun {
                     lastTroubleWasMissing = true
                     log.failed(entry, reason: "not there")
                 }
+
+                evictSettled(&awaitingUpload, into: &outcome)
 
                 if dispatching, consecutiveTrouble >= Self.givingUpAfter {
                     // Stop starting work, but let the lanes already in flight finish and be logged.
@@ -160,7 +199,60 @@ struct WriteBackRun {
                 group.addTask { [self] in await attempt(entry) }
             }
         }
+
+        await settle(&awaitingUpload, into: &outcome)
         return outcome
+    }
+
+    /// Waits out the last uploads so the files written in the closing lanes give their bytes back
+    /// too, then gives up on whatever is still in flight.
+    private func settle(_ awaiting: inout [(path: String, writtenAt: Date)],
+                        into outcome: inout Outcome) async {
+        guard !awaiting.isEmpty else { return }
+        let deadline = now().addingTimeInterval(Self.settlingSeconds)
+        while !awaiting.isEmpty, now() < deadline {
+            evictSettled(&awaiting, into: &outcome)
+            guard !awaiting.isEmpty else { break }
+            await pause(2)
+        }
+        outcome.stillLocal += awaiting.count
+        awaiting.removeAll()
+    }
+
+    /// Gives back the bytes of every file whose rewrite the provider has taken, and leaves the rest
+    /// in the queue.
+    ///
+    /// Deferred rather than done in the lane that wrote the file, because waiting there costs
+    /// throughput the fetch has already paid dearly for. Uploads settled within 10.6 s of the write
+    /// in measurement, and holding a 26 s lane open for another 10 would turn a 46-hour iCloud run
+    /// into 63. Asking is a local resource read with no round trip, so the consuming loop can afford
+    /// to look after every single photograph.
+    private func evictSettled(_ awaiting: inout [(path: String, writtenAt: Date)],
+                              into outcome: inout Outcome) {
+        guard !awaiting.isEmpty else { return }
+        let moment = now()
+        var stillWaiting: [(path: String, writtenAt: Date)] = []
+        for waiting in awaiting {
+            // Too soon after the write to believe the flag, for the reason `graceSeconds` records.
+            guard moment.timeIntervalSince(waiting.writtenAt) >= Self.graceSeconds,
+                  uploaded(waiting.path) else {
+                stillWaiting.append(waiting)
+                continue
+            }
+            do {
+                try evict(waiting.path)
+                outcome.evicted += 1
+            } catch {
+                // A refusal means not yet, not never: the provider is the authority on whether it
+                // has the rewrite, and it says no by refusing. So the file keeps its place in the
+                // queue and is asked again. Never a run failure and never counted towards giving up
+                // either - the photograph has its words, the provider has them too, and all that is
+                // at stake is room on a disk.
+                outcome.refusal = String(describing: error).prefix(200).description
+                stillWaiting.append(waiting)
+            }
+        }
+        awaiting = stillWaiting
     }
 
     private func attempt(_ entry: WriteBackEntry) async -> Attempt {

@@ -1,6 +1,7 @@
 import Foundation
 
-/// Whether a file's bytes are on this machine, and how to ask for them when they are not.
+/// Whether a file's bytes are on this machine, how to ask for them when they are not, and how
+/// to give them back afterwards.
 ///
 /// The write-back's list holds 62,675 photographs inside iCloud Drive and 1,652 inside OneDrive,
 /// and 97% of the iCloud ones are evicted: a name, a size, and no content. Waking one measured
@@ -15,6 +16,11 @@ import Foundation
 /// placeholder and fetched for nothing - which across 4,645 GB of originals is the one mistake in
 /// this run that would cost days. OneDrive answers through the same interface, so one path covers
 /// both providers.
+///
+/// Waking 62,675 placeholders would leave about 926 GB resident against 1.1 TiB free, so the run
+/// gives each one back as it goes. Only what it woke itself: a file whose bytes were already here
+/// was somebody's decision and is left as it was found. Not one of the 1,652 OneDrive files in the
+/// write-back set is evicted, so in practice that rule confines eviction to iCloud.
 public enum CloudFile {
     public enum Presence: Equatable {
         /// Not in a cloud provider at all - the NAS, or a local disk. Nothing to do.
@@ -65,6 +71,33 @@ public enum CloudFile {
             }
             await sleep(pollSeconds)
         }
+    }
+
+    /// Whether the provider has taken a local change back, read through a fresh URL for the caching
+    /// reason above. False for anything that is not in a provider at all, which is the safe answer:
+    /// nothing outside a provider should ever have its bytes given up.
+    public static func isUploaded(at url: URL) -> Bool {
+        let fresh = URL(fileURLWithPath: url.path)
+        let values = try? fresh.resourceValues(forKeys: [
+            .isUbiquitousItemKey, .ubiquitousItemIsUploadedKey,
+        ])
+        guard values?.isUbiquitousItem == true else { return false }
+        return values?.ubiquitousItemIsUploaded == true
+    }
+
+    /// Gives back the local bytes of a file the provider already holds.
+    ///
+    /// This is not a delete and it is not in tension with the rule that nothing here deletes a
+    /// photograph. The file keeps its name, its size and its metadata; only the local copy goes, and
+    /// asking for it again brings the same bytes back. Measured on a rewritten 2.3 MB JPEG: blocks
+    /// fell from 2,379,776 to 0 within half a second, and a re-fetch 14.5 s later returned an
+    /// identical SHA-256 with its keywords intact.
+    ///
+    /// The caller must have confirmed `isUploaded` first. The provider is expected to refuse an
+    /// unuploaded item, but a rewrite that exists nowhere else is not a thing to hand to an
+    /// expectation.
+    public static func evict(at url: URL) throws {
+        try FileManager.default.evictUbiquitousItem(at: url)
     }
 
     public static func presence(at url: URL) -> Presence {

@@ -50,6 +50,15 @@ private final class OrderedWriter: WriteBackWriter, @unchecked Sendable {
     }
 }
 
+/// Drives the closing settling wait, which is the one part of the run measured in real seconds.
+private final class Clock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seconds = 0.0
+    var value: Date { lock.withLock { Date(timeIntervalSince1970: seconds) } }
+    var elapsed: Double { lock.withLock { seconds } }
+    func advance(_ by: Double) { lock.withLock { seconds += by } }
+}
+
 /// An actor rather than a lock because the fetch seam is async and this is awaited from inside it.
 private actor LaneCounter {
     private var inFlight = 0
@@ -508,6 +517,172 @@ final class WriteBackRunTests: XCTestCase {
         XCTAssertEqual(peak, 8)
     }
 
+    // MARK: - giving the bytes back
+
+    func testAWokenFileGivesItsBytesBackOnceTheProviderHasTheRewrite() async throws {
+        // The whole point: 62,675 woken placeholders held locally would be about 926 GB against
+        // 1.1 TiB free, so the run has to leave the disk as it found it.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        var given: [String] = []
+        subject.evict = { given.append($0) }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg"), entry("/icloud/b.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.evicted, 2)
+        XCTAssertEqual(outcome.stillLocal, 0)
+        XCTAssertEqual(given.sorted(), ["/icloud/a.jpg", "/icloud/b.jpg"])
+    }
+
+    func testAFileWhoseBytesWereAlreadyHereIsLeftAlone() async throws {
+        // Somebody chose to have that file locally. The run woke it, so the run does not unmake
+        // that choice - and measurement found all 1,616 of the OneDrive photographs in this state.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .present }
+        subject.evict = { XCTFail("gave back \($0), which this run did not wake") }
+        let outcome = await subject.run(entries: [entry("/onedrive/a.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 1)
+        XCTAssertEqual(outcome.fetched, 0)
+        XCTAssertEqual(outcome.evicted, 0)
+    }
+
+    func testANasFileIsNeverEvicted() async throws {
+        // It has no provider to give bytes back to, and evicting one would be a delete.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.evict = { XCTFail("gave back \($0), which is not in a cloud provider") }
+        let outcome = await subject.run(entries: [entry("/Volumes/Photos/a.RAF")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 1)
+        XCTAssertEqual(outcome.evicted, 0)
+    }
+
+    func testBytesAreKeptUntilTheProviderHasTakenTheRewrite() async throws {
+        // The one thing eviction must never do: drop the only copy of a rewrite. Nothing goes back
+        // before `isUploaded` says the provider has it.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        subject.uploaded = { _ in false }
+        subject.evict = { XCTFail("gave back \($0) before the provider had the rewrite") }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 1)
+        XCTAssertEqual(outcome.evicted, 0)
+        // Reported, not hidden: a run that gave nothing back is a run that fills the disk.
+        XCTAssertEqual(outcome.stillLocal, 1)
+    }
+
+    func testAFileWaitsItsTurnAndThenGivesItsBytesBack() async throws {
+        // Proof that the queue is a queue and not a single missed chance: the provider is not ready
+        // when the file is written, and the bytes still go back.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        var asked = 0
+        subject.uploaded = { _ in asked += 1; return asked > 3 }
+        var given: [String] = []
+        subject.evict = { given.append($0) }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(given, ["/icloud/a.jpg"])
+        XCTAssertEqual(outcome.evicted, 1)
+        XCTAssertEqual(outcome.stillLocal, 0)
+    }
+
+    func testOneStuckUploadDoesNotHoldUpTheRest() async throws {
+        // Why the eviction is deferred instead of done in the lane that wrote the file: waiting
+        // there would make one slow upload everybody's problem, and the run takes days already.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        subject.uploaded = { $0 != "/icloud/stuck.jpg" }
+        subject.evict = { _ in }
+        let entries = [entry("/icloud/stuck.jpg"), entry("/icloud/b.jpg"), entry("/icloud/c.jpg")]
+        let outcome = await subject.run(entries: entries,
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 3)
+        XCTAssertEqual(outcome.evicted, 2)
+        XCTAssertEqual(outcome.stillLocal, 1)
+    }
+
+    func testARefusedEvictionIsNotAFailedPhotograph() async throws {
+        // The photograph has its words and the provider has them too. What is left is room on a
+        // disk, which is not worth failing a run over and must not count towards giving up.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        subject.evict = { _ in throw CocoaError(.fileWriteNoPermission) }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.written, 1)
+        XCTAssertEqual(outcome.failed, 0)
+        XCTAssertEqual(outcome.evicted, 0)
+        XCTAssertEqual(outcome.stillLocal, 1)
+        // Logged as done, so a resume does not rewrite it for the sake of some local bytes.
+        XCTAssertEqual(try WriteBackLog.alreadyWritten(in: directory), ["/icloud/a.jpg"])
+    }
+
+    func testNothingIsAskedForInTheMomentAfterTheWrite() async throws {
+        // The measured root cause of an eviction step that gave nothing back: `isUploaded` still
+        // describes the file as it was before the write for about 0.4 s afterwards, so an eviction
+        // asked for immediately is asked for on a stale answer, and the provider refuses it.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        let clock = Clock()
+        subject.now = { clock.value }
+        subject.pause = { clock.advance(Double($0)) }
+        var askedAt: [Double] = []
+        subject.uploaded = { _ in askedAt.append(clock.elapsed); return true }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.evicted, 1)
+        XCTAssertFalse(askedAt.isEmpty)
+        XCTAssertGreaterThanOrEqual(askedAt.first ?? 0, WriteBackRun.graceSeconds)
+    }
+
+    func testARefusalMeansNotYetAndTheFileIsAskedAgain() async throws {
+        // The other half of the same defect: a refused eviction used to drop the file from the queue,
+        // so the one attempt made inside the stale window was the only attempt ever made.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        var attempts = 0
+        subject.evict = { _ in
+            attempts += 1
+            if attempts < 3 { throw CocoaError(.fileWriteNoPermission) }
+        }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(attempts, 3)
+        XCTAssertEqual(outcome.evicted, 1)
+        XCTAssertEqual(outcome.stillLocal, 0)
+    }
+
+    func testARefusalToTheLastIsReportedAndNotSwallowed() async throws {
+        // A silent refusal is what let a completely broken step look like a working one.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        subject.fetch = { _, _ in 20 }
+        subject.evict = { _ in throw CocoaError(.fileWriteNoPermission) }
+        let outcome = await subject.run(entries: [entry("/icloud/a.jpg")],
+                                       log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(outcome.evicted, 0)
+        XCTAssertEqual(outcome.stillLocal, 1)
+        XCTAssertNotNil(outcome.refusal)
+    }
+
     // MARK: - helpers
 
     private func run(writer: WriteBackWriter, quiet: QuietHours = .none,
@@ -521,8 +696,16 @@ final class WriteBackRunTests: XCTestCase {
             XCTFail("fetched \(path), which is not in a cloud provider")
             return 0
         }
+        // A provider that has already taken everything, so a test that is not about eviction
+        // drains its queue at once instead of sitting out the settling wait.
+        subject.uploaded = { _ in true }
+        subject.evict = { _ in }
         subject.say = { _ in }
-        subject.pause = { _ in }
+        // The grace after a write and the settling wait at the end are both measured in real
+        // seconds, so the clock is driven by the pauses rather than by the wall.
+        let clock = Clock()
+        subject.now = { clock.value }
+        subject.pause = { clock.advance(Double($0)) }
         return subject
     }
 
