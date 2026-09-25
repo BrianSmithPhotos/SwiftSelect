@@ -31,6 +31,8 @@ struct VideoPreviewView: View {
             transport
             skimStrip
         }
+        // The strip is the last thing in the pane, so without this it sits on the window's edge.
+        .padding(.bottom, 8)
         // Keyed on the URL so moving to another clip loads it into the same player rather than
         // leaving the old one playing under the new one.
         .task(id: url) {
