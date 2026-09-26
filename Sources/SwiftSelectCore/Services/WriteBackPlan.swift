@@ -52,21 +52,21 @@ public enum WriteBackPlan {
 
     /// How long to allow a cloud provider to hand over an evicted file, before exiftool starts.
     ///
-    /// Deliberately not `timeoutSeconds`. That one scales with the file because it is paying for
-    /// bytes over SMB; this one barely scales at all, because fetching a placeholder was measured to
-    /// cost the same 12.8 to 26.8 seconds whether the file was 2 MB or 48 MB - it is a round trip to
-    /// the provider, not a transfer. A flat floor generous enough for the slowest observed fetch is
-    /// therefore the right shape, with a small size term so a 117 MB DNG is not held to a figure
-    /// measured on files a fortieth of its size.
+    /// Sized on `bytesInFlight`, every byte the run's lanes are fetching at once, not on the one
+    /// file. The provider shares one download between them: during a real 8-lane run it delivered
+    /// about 11 MB/s in all, so eight 280 MB DNGs took around 200 s, and a 13 MB JPG queued behind
+    /// them waited as long as they did (2026-09-26). Sized per file at 4 MB/s, both got 90 s and
+    /// failed while still arriving - 8 of 12 such failures were local minutes later.
     ///
-    /// The floor is 90 s against a 26.8 s worst case measured at 8 lanes. That is deliberately fat:
-    /// the fetch competes with every other lane for one provider, the run is unattended for days,
-    /// and the cost of being wrong in this direction is one slow file where the cost of being wrong
-    /// in the other is a photograph logged as failed that was merely queued.
+    /// The floor stays for the common case of small files, where a fetch is a round trip to the
+    /// provider rather than a transfer: 12.8 to 26.8 s whether 2 MB or 48 MB. 90 s is fat on
+    /// purpose, and so is 8 MB/s against the 11 measured: the run is unattended for days, and the
+    /// cost of being wrong this way is one slow file, where the other is a photograph logged as
+    /// failed that was merely queued.
     public static func fetchTimeoutSeconds(
-        bytes: Int, megabytesPerSecond: Double = 4, floor: Double = 90
+        bytesInFlight: Int, megabytesPerSecond: Double = 8, floor: Double = 90
     ) -> Double {
-        let megabytes = Double(bytes) / (1024 * 1024)
+        let megabytes = Double(bytesInFlight) / (1024 * 1024)
         return max(floor, megabytes / megabytesPerSecond)
     }
 

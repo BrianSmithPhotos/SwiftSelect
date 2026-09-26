@@ -128,6 +128,12 @@ struct WriteBackRun {
         case wrote(WriteBackEntry, fetchSeconds: Double?)
         case failed(WriteBackEntry, String)
         case notThere(WriteBackEntry)
+
+        var entry: WriteBackEntry {
+            switch self {
+            case let .wrote(entry, _), let .failed(entry, _), let .notThere(entry): return entry
+            }
+        }
     }
 
     func run(entries: [WriteBackEntry], log: WriteBackLog, limit: Int? = nil) async -> Outcome {
@@ -141,6 +147,8 @@ struct WriteBackRun {
         // bytes go back. The time is when the write finished, and it is what `graceSeconds` is
         // measured from; nothing else about the entry is needed to give bytes back.
         var awaitingUpload: [(path: String, writtenAt: Date)] = []
+        // The bytes of every photograph in flight, which is what a fetch shares the provider with.
+        var bytesInFlight = 0
 
         await withTaskGroup(of: Attempt.self) { group in
             var next = todo.makeIterator()
@@ -149,11 +157,14 @@ struct WriteBackRun {
             for _ in 0..<lanes {
                 guard let entry = next.next() else { break }
                 await waitOutQuietHours()
-                group.addTask { [self] in await attempt(entry) }
+                bytesInFlight += entry.bytes
+                let allowance = WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: bytesInFlight)
+                group.addTask { [self] in await attempt(entry, fetchAllowance: allowance) }
             }
 
             while let result = await group.next() {
                 completed += 1
+                bytesInFlight -= result.entry.bytes
                 switch result {
                 case let .wrote(entry, fetchSeconds):
                     // Logged only on success, and by this loop alone: the log is both the resume
@@ -203,7 +214,9 @@ struct WriteBackRun {
 
                 guard dispatching, let entry = next.next() else { continue }
                 await waitOutQuietHours()
-                group.addTask { [self] in await attempt(entry) }
+                bytesInFlight += entry.bytes
+                let allowance = WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: bytesInFlight)
+                group.addTask { [self] in await attempt(entry, fetchAllowance: allowance) }
             }
         }
 
@@ -262,7 +275,7 @@ struct WriteBackRun {
         awaiting = stillWaiting
     }
 
-    private func attempt(_ entry: WriteBackEntry) async -> Attempt {
+    private func attempt(_ entry: WriteBackEntry, fetchAllowance: Double) async -> Attempt {
         guard exists(entry.path) else { return .notThere(entry) }
         guard !dryRun else { return .wrote(entry, fetchSeconds: nil) }
         var waited: Double?
@@ -271,8 +284,7 @@ struct WriteBackRun {
             // opening one would block inside a timeout sized for reading bytes off a disk, and a
             // small file's allowance is 12 s where the fetch alone measured 12.8 to 26.8.
             if presence(entry.path) == .evicted {
-                waited = try await fetch(entry.path,
-                                         WriteBackPlan.fetchTimeoutSeconds(bytes: entry.bytes))
+                waited = try await fetch(entry.path, fetchAllowance)
             }
             try await writer.writeBack(
                 description: entry.description,

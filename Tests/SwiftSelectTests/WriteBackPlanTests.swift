@@ -74,22 +74,23 @@ final class WriteBackPlanTests: XCTestCase {
         // iCloud would have failed before exiftool saw a byte.
         let small = 2 * 1024 * 1024
         XCTAssertEqual(WriteBackPlan.timeoutSeconds(bytes: small), 12, accuracy: 0.01)
-        XCTAssertGreaterThan(WriteBackPlan.fetchTimeoutSeconds(bytes: small), 26.8 * 2)
+        XCTAssertGreaterThan(WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: small), 26.8 * 2)
     }
 
-    func testTheFetchAllowanceBarelyScalesBecauseTheCostIsNotBytes() {
-        // Measured: 2.1 MB took 26.8 s and 48.2 MB took 12.5. Size does not predict the wait, so
-        // the floor does nearly all the work and both of these land on it.
-        let small = WriteBackPlan.fetchTimeoutSeconds(bytes: 2 * 1024 * 1024)
-        let large = WriteBackPlan.fetchTimeoutSeconds(bytes: 48 * 1024 * 1024)
-        XCTAssertEqual(small, large, accuracy: 0.01)
+    func testSmallFilesInFlightAllLandOnTheFloor() {
+        // Measured: 2.1 MB took 26.8 s and 48.2 MB took 12.5. For small files size does not predict
+        // the wait, so eight lanes of them together still get the floor and nothing more.
+        let small = WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: 8 * 2 * 1024 * 1024)
+        let large = WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: 8 * 10 * 1024 * 1024)
         XCTAssertEqual(small, 90, accuracy: 0.01)
+        XCTAssertEqual(large, 90, accuracy: 0.01)
     }
 
-    func testAVeryLargeFileStillGetsMoreThanTheFloor() {
-        // 400 MB is past where the floor is credible even for a round-trip-bound fetch, so the
-        // size term takes over rather than holding a huge file to a figure measured on small ones.
-        XCTAssertGreaterThan(WriteBackPlan.fetchTimeoutSeconds(bytes: 400 * 1024 * 1024), 90)
+    func testEightLargeDngsInFlightGetLongerThanTheyTookForReal() {
+        // The 2011-08-04 Iceland folder: eight DNGs of about 280 MB at once, which the provider
+        // delivered at about 11 MB/s in all - around 200 s. The old 90 s failed them mid-arrival.
+        let allowance = WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: 8 * 280 * 1024 * 1024)
+        XCTAssertGreaterThan(allowance, 8 * 280 / 11)
     }
 
     // MARK: - resume

@@ -460,8 +460,40 @@ final class WriteBackRunTests: XCTestCase {
         subject.fetch = { _, timeout in given = timeout; return 1 }
         _ = await subject.run(entries: [entry("/icloud/a.jpg", bytes: 2 * 1024 * 1024)],
                               log: try WriteBackLog(directory: directory))
-        XCTAssertEqual(given, WriteBackPlan.fetchTimeoutSeconds(bytes: 2 * 1024 * 1024))
+        XCTAssertEqual(given, WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: 2 * 1024 * 1024))
         XCTAssertGreaterThan(try XCTUnwrap(given), 26.8)
+    }
+
+    func testASmallFileQueuedBehindLargeOnesIsAllowedTheirTimeToo() async throws {
+        // The provider shares one download between the lanes, so a 13 MB JPG started beside seven
+        // 280 MB DNGs waits as long as they do - about 200 s for real, where it was given 90.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.workers = 8
+        subject.presence = { _ in .evicted }
+        let lock = NSLock()
+        var given: [String: Double] = [:]
+        subject.fetch = { path, timeout in
+            lock.lock(); given[path] = timeout; lock.unlock()
+            return 1
+        }
+        let dngs = (0..<7).map { entry("/icloud/\($0).dng", bytes: 280 * 1024 * 1024) }
+        let jpg = entry("/icloud/a.jpg", bytes: 13 * 1024 * 1024)
+        _ = await subject.run(entries: dngs + [jpg], log: try WriteBackLog(directory: directory))
+        XCTAssertGreaterThan(try XCTUnwrap(given["/icloud/a.jpg"]), 200)
+    }
+
+    func testAFinishedFileNoLongerCountsAgainstTheNextFetch() async throws {
+        // One lane: the DNG is done before the JPG starts, so the JPG is back on the floor.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        var given: [String: Double] = [:]
+        subject.fetch = { path, timeout in given[path] = timeout; return 1 }
+        let dng = entry("/icloud/a.dng", bytes: 280 * 1024 * 1024)
+        let jpg = entry("/icloud/a.jpg", bytes: 13 * 1024 * 1024)
+        _ = await subject.run(entries: [dng, jpg], log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(given["/icloud/a.jpg"], 90)
     }
 
     func testAFetchThatNeverArrivesIsAFailureAndExifToolIsNotStarted() async throws {
