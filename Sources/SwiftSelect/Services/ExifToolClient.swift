@@ -220,6 +220,7 @@ struct ExifToolClient: MetadataWriter {
             }
             cleanupBackup(for: url)
         } catch {
+            removeTempFileLeftByTimeout(error, for: url)
             restoreBackupIfPresent(for: url)
             throw error
         }
@@ -297,7 +298,10 @@ struct ExifToolClient: MetadataWriter {
             for url in urls { cleanupBackup(for: url) }
             return Dictionary(uniqueKeysWithValues: urls.map { ($0, .success(())) })
         } catch {
-            for url in urls { restoreBackupIfPresent(for: url) }
+            for url in urls {
+                removeTempFileLeftByTimeout(error, for: url)
+                restoreBackupIfPresent(for: url)
+            }
             var results: [URL: Result<Void, Error>] = [:]
             for url in urls {
                 do {
@@ -472,6 +476,22 @@ struct ExifToolClient: MetadataWriter {
 
     private func cleanupBackup(for url: URL) {
         try? FileManager.default.removeItem(at: backupURL(for: url))
+    }
+
+    static func tempFileURL(for url: URL) -> URL {
+        url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + "_exiftool_tmp")
+    }
+
+    /// exiftool writes the new file beside the old one as `<name>_exiftool_tmp` and renames it at
+    /// the end. Terminated on a timeout it never gets to delete that file, and while it exists every
+    /// later write to the photograph fails with "Temporary file already exists" (proven 2026-09-25:
+    /// SIGTERM mid-write on a local 270 MB DNG left it behind). Only after a timeout is it known to
+    /// be ours: exiftool refuses to start when one already exists, so after any other failure a
+    /// leftover belongs to some other write and is not touched. It is a partial copy, never the
+    /// photograph, which is why it is deleted outright rather than trashed.
+    func removeTempFileLeftByTimeout(_ error: Error, for url: URL) {
+        guard case ExifToolError.timedOut = error else { return }
+        try? FileManager.default.removeItem(at: Self.tempFileURL(for: url))
     }
 
     private func restoreBackupIfPresent(for url: URL) {

@@ -426,4 +426,29 @@ final class ExifToolClientWriteTests: XCTestCase {
     func testImageDataRuleLetsAFormatWithoutAHashThrough() {
         XCTAssertTrue(ExifToolClient.imageDataSurvived(before: nil, after: nil))
     }
+
+    // MARK: - exiftool's temp file after a timeout
+
+    /// The state a timed-out write left on the NAS: while the temp file exists, every write fails.
+    /// A failure that is not a timeout leaves it alone - it belongs to another write.
+    func testALeftoverTempFileBlocksWritesAndOnlyATimeoutRemovesIt() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+        let temp = ExifToolClient.tempFileURL(for: url)
+        try Data("partial".utf8).write(to: temp)
+
+        do {
+            try await client.write(title: nil, description: "x", keywords: [], gps: nil,
+                                   timeoutSeconds: 12, to: url)
+            XCTFail("exiftool should refuse while its temp file exists")
+        } catch ExifToolError.processFailed(_, let stderr) {
+            XCTAssertTrue(stderr.contains("Temporary file already exists"), stderr)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.path))
+
+        client.removeTempFileLeftByTimeout(ExifToolError.timedOut, for: url)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.path))
+        try await client.write(title: nil, description: "x", keywords: [], gps: nil,
+                               timeoutSeconds: 12, to: url)
+    }
 }
