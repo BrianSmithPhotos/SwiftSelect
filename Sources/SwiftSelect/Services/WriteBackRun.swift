@@ -149,6 +149,10 @@ struct WriteBackRun {
         var awaitingUpload: [(path: String, writtenAt: Date)] = []
         // The bytes of every photograph in flight, which is what a fetch shares the provider with.
         var bytesInFlight = 0
+        // Placeholders whose fetch timed out. The provider is never told to stop, so it goes on
+        // downloading them - every one of 25 such failures was local minutes later (2026-09-26) -
+        // and until they land they hold up every fetch behind them.
+        var stillArriving: [(path: String, bytes: Int)] = []
 
         await withTaskGroup(of: Attempt.self) { group in
             var next = todo.makeIterator()
@@ -158,7 +162,7 @@ struct WriteBackRun {
                 guard let entry = next.next() else { break }
                 await waitOutQuietHours()
                 bytesInFlight += entry.bytes
-                let allowance = WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: bytesInFlight)
+                let allowance = fetchAllowance(bytesInFlight, &stillArriving)
                 group.addTask { [self] in await attempt(entry, fetchAllowance: allowance) }
             }
 
@@ -180,6 +184,7 @@ struct WriteBackRun {
                     }
                     consecutiveTrouble = 0
                 case let .failed(entry, reason):
+                    if presence(entry.path) == .evicted { stillArriving.append((entry.path, entry.bytes)) }
                     outcome.failed += 1
                     consecutiveTrouble += 1
                     lastTroubleWasMissing = false
@@ -215,13 +220,22 @@ struct WriteBackRun {
                 guard dispatching, let entry = next.next() else { continue }
                 await waitOutQuietHours()
                 bytesInFlight += entry.bytes
-                let allowance = WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: bytesInFlight)
+                let allowance = fetchAllowance(bytesInFlight, &stillArriving)
                 group.addTask { [self] in await attempt(entry, fetchAllowance: allowance) }
             }
         }
 
         await settle(&awaitingUpload, into: &outcome)
         return outcome
+    }
+
+    /// The fetch allowance for the next photograph, counting the downloads that timed out but are
+    /// still arriving, and forgetting the ones that have landed.
+    private func fetchAllowance(_ bytesInFlight: Int,
+                                _ stillArriving: inout [(path: String, bytes: Int)]) -> Double {
+        stillArriving.removeAll { presence($0.path) != .evicted }
+        let arriving = stillArriving.reduce(0) { $0 + $1.bytes }
+        return WriteBackPlan.fetchTimeoutSeconds(bytesInFlight: bytesInFlight + arriving)
     }
 
     /// Waits out the last uploads so the files written in the closing lanes give their bytes back

@@ -496,6 +496,44 @@ final class WriteBackRunTests: XCTestCase {
         XCTAssertEqual(given["/icloud/a.jpg"], 90)
     }
 
+    func testATimedOutDownloadStillCountsUntilItLands() async throws {
+        // A timed-out fetch is not cancelled: the provider goes on downloading it, and the next
+        // file waits behind it. Forgetting it is what turned one slow DNG into ten failures.
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        subject.presence = { _ in .evicted }
+        var given: [String: Double] = [:]
+        subject.fetch = { path, timeout in
+            given[path] = timeout
+            if path.hasSuffix(".dng") { throw CloudFile.Failure.notFetched(path: path, afterSeconds: 90) }
+            return 1
+        }
+        let dngs = (0..<7).map { entry("/icloud/\($0).dng", bytes: 280 * 1024 * 1024) }
+        let jpg = entry("/icloud/a.jpg", bytes: 13 * 1024 * 1024)
+        _ = await subject.run(entries: dngs + [jpg], log: try WriteBackLog(directory: directory))
+        XCTAssertGreaterThan(try XCTUnwrap(given["/icloud/a.jpg"]), 200)
+    }
+
+    func testADownloadThatHasLandedNoLongerCounts() async throws {
+        let writer = SpyWriter()
+        var subject = run(writer: writer)
+        var landed = false
+        subject.presence = { path in path.hasSuffix(".dng") && landed ? .present : .evicted }
+        var given: [String: Double] = [:]
+        subject.fetch = { path, timeout in
+            given[path] = timeout
+            guard !path.hasSuffix(".dng") else {
+                landed = true
+                throw CloudFile.Failure.notFetched(path: path, afterSeconds: 90)
+            }
+            return 1
+        }
+        let dng = entry("/icloud/a.dng", bytes: 2000 * 1024 * 1024)
+        let jpg = entry("/icloud/a.jpg", bytes: 13 * 1024 * 1024)
+        _ = await subject.run(entries: [dng, jpg], log: try WriteBackLog(directory: directory))
+        XCTAssertEqual(given["/icloud/a.jpg"], 90)
+    }
+
     func testAFetchThatNeverArrivesIsAFailureAndExifToolIsNotStarted() async throws {
         let writer = SpyWriter()
         var subject = run(writer: writer)
