@@ -5,6 +5,9 @@ enum ExifToolError: Error, LocalizedError {
     case processFailed(status: Int32, stderr: String)
     case invalidOutput
     case timedOut
+    /// The write finished without an error but the picture itself is not what it was. The backup
+    /// has been restored over it, so the file is as it was before the write.
+    case imageDataChanged
 
     /// Without this, `localizedDescription` on a plain `Error` renders as Foundation's
     /// "The operation couldn't be completed. (SwiftSelect.ExifToolError error 0.)" — which is
@@ -26,6 +29,8 @@ enum ExifToolError: Error, LocalizedError {
             return "exiftool returned output that could not be read"
         case .timedOut:
             return "exiftool timed out"
+        case .imageDataChanged:
+            return "the image data changed during the write, so the original was put back"
         }
     }
 }
@@ -201,7 +206,7 @@ struct ExifToolClient: MetadataWriter {
     func write(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
         subjectDistance: Double? = nil, instructions: String? = nil,
-        timeoutSeconds: Double, to url: URL
+        timeoutSeconds: Double, verifyImageData: Bool = false, to url: URL
     ) async throws {
         try MetadataWriteFieldRules.validate(gps: gps)
         let assignments = Self.writeArguments(
@@ -210,10 +215,62 @@ struct ExifToolClient: MetadataWriter {
         do {
             _ = try await runWrite(assignments: assignments, paths: [url.path],
                                    timeoutSeconds: timeoutSeconds)
+            if verifyImageData {
+                try await checkImageData(of: url, timeoutSeconds: timeoutSeconds)
+            }
             cleanupBackup(for: url)
         } catch {
             restoreBackupIfPresent(for: url)
             throw error
+        }
+    }
+
+    /// Compares the picture - exiftool's ImageDataHash, metadata excluded - of the written file
+    /// against the `_original` backup, before that backup is deleted. exiftool's exit status only
+    /// says it believes the write worked; this is the proof that the pixels came through.
+    ///
+    /// Both files were just read and written, so both are in the page cache and this costs little
+    /// even over SMB.
+    ///
+    /// Both are hashed through symlinks with no extension, because exiftool lets the extension
+    /// decide whether it hashes at all: an OM-3 `.ORF` gets no ImageDataHash, while the same bytes
+    /// under any other name - its own `.ORF_original` backup included - do. Compared as named, every
+    /// ORF would look damaged (proven 2026-09-25: file and backup renamed alike hash identically).
+    /// Through the links, both sides are identified by content, and ORF is verified too.
+    private func checkImageData(of url: URL, timeoutSeconds: Double) async throws {
+        let links = FileManager.default.temporaryDirectory
+            .appendingPathComponent("imagedata-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: links, withIntermediateDirectories: true)
+        // Only symlinks live here, so removing the directory never touches a photograph.
+        defer { try? FileManager.default.removeItem(at: links) }
+        let before = links.appendingPathComponent("before")
+        let after = links.appendingPathComponent("after")
+        try FileManager.default.createSymbolicLink(at: before, withDestinationURL: backupURL(for: url))
+        try FileManager.default.createSymbolicLink(at: after, withDestinationURL: url)
+
+        let output = try await run(
+            arguments: ["-j", "-ImageDataHash", "-api", "ImageHashType=SHA256",
+                        before.path, after.path],
+            timeoutSeconds: timeoutSeconds)
+        guard let records = try? JSONSerialization.jsonObject(with: output) as? [[String: Any]]
+        else { throw ExifToolError.invalidOutput }
+        func hash(_ link: URL) -> String? {
+            records.first { $0["SourceFile"] as? String == link.path }?["ImageDataHash"] as? String
+        }
+        guard Self.imageDataSurvived(before: hash(before), after: hash(after)) else {
+            throw ExifToolError.imageDataChanged
+        }
+    }
+
+    /// The rule, apart from the I/O so it can be tested. exiftool 13.55 has no image-data hash for
+    /// PSD or GIF (checked 2026-09-25 on real files), so neither side having one means there is
+    /// nothing to compare, and the write stands as it did before this check existed. A hash that
+    /// was there before and is gone after is a file exiftool can no longer parse - a failure.
+    static func imageDataSurvived(before: String?, after: String?) -> Bool {
+        switch (before, after) {
+        case (nil, nil): return true
+        case let (before?, after?): return before == after
+        default: return false
         }
     }
 

@@ -14,9 +14,11 @@ extension ExifToolClient: WriteBackWriter {
     func writeBack(description: String, keywords: [String],
                    timeoutSeconds: Double, to url: URL) async throws {
         // Deliberately not the batched overload. A batch shares one exiftool invocation and one
-        // set of values, and here every photograph has its own description.
+        // set of values, and here every photograph has its own description. verifyImageData
+        // because a run over a whole library is where a bad write would go unseen: the backup
+        // is only deleted once the picture is proven unchanged.
         try await write(title: nil, description: description, keywords: keywords, gps: nil,
-                        timeoutSeconds: timeoutSeconds, to: url)
+                        timeoutSeconds: timeoutSeconds, verifyImageData: true, to: url)
     }
 }
 

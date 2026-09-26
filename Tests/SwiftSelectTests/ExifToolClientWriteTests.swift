@@ -395,4 +395,35 @@ final class ExifToolClientWriteTests: XCTestCase {
         XCTAssertEqual(scan.captions[described], "Māori café")
         XCTAssertNil(scan.captions[blank])
     }
+
+    // MARK: - Image data verification (the headless write-back)
+
+    func testAVerifiedWriteKeepsTheCaptionAndDeletesTheBackup() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+
+        try await client.write(title: nil, description: "Checked", keywords: ["a"], gps: nil,
+                               timeoutSeconds: 12, verifyImageData: true, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["XMP-dc:Description"] as? String, "Checked")
+        let backup = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + "_original")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
+    }
+
+    func testImageDataRuleNeedsBothHashesEqual() {
+        XCTAssertTrue(ExifToolClient.imageDataSurvived(before: "abc", after: "abc"))
+        XCTAssertFalse(ExifToolClient.imageDataSurvived(before: "abc", after: "abd"))
+    }
+
+    /// A hash before and none after is a file exiftool can no longer parse.
+    func testImageDataRuleFailsWhenTheHashIsLost() {
+        XCTAssertFalse(ExifToolClient.imageDataSurvived(before: "abc", after: nil))
+        XCTAssertFalse(ExifToolClient.imageDataSurvived(before: nil, after: "abc"))
+    }
+
+    /// PSD and GIF have no image-data hash in exiftool 13.55, so there is nothing to compare.
+    func testImageDataRuleLetsAFormatWithoutAHashThrough() {
+        XCTAssertTrue(ExifToolClient.imageDataSurvived(before: nil, after: nil))
+    }
 }
