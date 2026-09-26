@@ -32,38 +32,67 @@ struct EvictRun {
     var evict: (String) throws -> Void = { try CloudFile.evict(at: URL(fileURLWithPath: $0)) }
     var dryRun = false
 
+    /// Evictions in flight at once. Each one is a round trip to the provider's daemon, about 0.55 s
+    /// whatever the file's size, so they overlap well: 8 at once cost 0.09 s a file against 0.61 s
+    /// one at a time (measured 2026-09-26 on files uploaded long before).
+    var lanes = 1
+
     func run(paths: [String]) -> Outcome {
+        let lock = NSLock()
+        var next = 0
         var outcome = Outcome()
-        for path in paths {
-            switch presence(path) {
-            case .notCloud:
-                outcome.notCloud += 1
-                continue
-            case .evicted:
-                outcome.alreadyGone += 1
-                continue
-            case .present:
-                break
-            }
-            // The provider has to say it holds the file before its only local copy goes. `isUploaded`
-            // lags a write by about 0.4 s, but by the time a batch has been through the index chain
-            // that is long past - see `WriteBackRun.graceSeconds` for the measurement.
-            guard uploaded(path) else {
-                outcome.notTakenYet += 1
-                continue
-            }
-            guard !dryRun else {
-                outcome.gaveBack += 1
-                continue
-            }
-            do {
-                try evict(path)
-                outcome.gaveBack += 1
-            } catch {
-                outcome.refused += 1
-                outcome.refusal = String(describing: error).prefix(200).description
+        // Each lane takes the next path until none are left, so a slow file holds up only its lane.
+        DispatchQueue.concurrentPerform(iterations: max(1, lanes)) { _ in
+            while true {
+                lock.lock()
+                let index = next
+                next += 1
+                lock.unlock()
+                guard index < paths.count else { return }
+                let step = step(paths[index])
+                lock.lock()
+                outcome.add(step)
+                lock.unlock()
             }
         }
         return outcome
+    }
+
+    enum Step {
+        case notCloud, alreadyGone, notTakenYet, gaveBack
+        case refused(String)
+    }
+
+    func step(_ path: String) -> Step {
+        switch presence(path) {
+        case .notCloud: return .notCloud
+        case .evicted: return .alreadyGone
+        case .present: break
+        }
+        // The provider has to say it holds the file before its only local copy goes. `isUploaded`
+        // lags a write by about 0.4 s, but by the time a batch has been through the index chain
+        // that is long past - see `WriteBackRun.graceSeconds` for the measurement.
+        guard uploaded(path) else { return .notTakenYet }
+        guard !dryRun else { return .gaveBack }
+        do {
+            try evict(path)
+            return .gaveBack
+        } catch {
+            return .refused(String(describing: error).prefix(200).description)
+        }
+    }
+}
+
+extension EvictRun.Outcome {
+    mutating func add(_ step: EvictRun.Step) {
+        switch step {
+        case .notCloud: notCloud += 1
+        case .alreadyGone: alreadyGone += 1
+        case .notTakenYet: notTakenYet += 1
+        case .gaveBack: gaveBack += 1
+        case .refused(let reason):
+            refused += 1
+            refusal = reason
+        }
     }
 }

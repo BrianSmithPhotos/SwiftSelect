@@ -20,7 +20,9 @@ enum EvictCommand {
 
         say("\(entries.count) photographs in the manifest")
         if options.dryRun { say("dry run: nothing will be handed back") }
-        let outcome = EvictRun(dryRun: options.dryRun).run(paths: entries.map(\.path))
+        var run = EvictRun(dryRun: options.dryRun)
+        run.lanes = 8
+        let outcome = run.run(paths: entries.map(\.path))
 
         say("\(options.dryRun ? "would have handed back" : "handed back") \(outcome.gaveBack), "
             + "already gone \(outcome.alreadyGone), not in a provider \(outcome.notCloud)")

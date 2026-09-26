@@ -83,6 +83,30 @@ final class EvictRunTests: XCTestCase {
         XCTAssertEqual(outcome.gaveBack, 1)
     }
 
+    func testLanesOverlapAndStillHandEachFileBackOnce() {
+        // Half the batch is not uploaded yet: lanes must not loosen that rule.
+        let paths = (0..<40).map { "/icloud/\($0).jpg" }
+        let lock = NSLock()
+        var given: [String] = []
+        var inFlight = 0
+        var mostInFlight = 0
+        var subject = EvictRun()
+        subject.lanes = 8
+        subject.presence = { _ in .present }
+        subject.uploaded = { path in Int(path.dropFirst(8).dropLast(4))! % 2 == 0 }
+        subject.evict = { path in
+            lock.lock(); inFlight += 1; mostInFlight = max(mostInFlight, inFlight); lock.unlock()
+            Thread.sleep(forTimeInterval: 0.02)
+            lock.lock(); inFlight -= 1; given.append(path); lock.unlock()
+        }
+        let outcome = subject.run(paths: paths)
+        XCTAssertEqual(Set(given), Set(paths.enumerated().filter { $0.offset % 2 == 0 }.map(\.element)))
+        XCTAssertEqual(given.count, 20)
+        XCTAssertEqual(outcome.gaveBack, 20)
+        XCTAssertEqual(outcome.notTakenYet, 20)
+        XCTAssertGreaterThan(mostInFlight, 1)
+    }
+
     // MARK: - the arguments
 
     func testTheVerbIsRecognisedWithItsManifest() throws {
