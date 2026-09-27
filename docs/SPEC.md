@@ -312,7 +312,9 @@ The same write, driven from a file instead of the UI, for a job too large to
 click through: SwiftPhotoLog's index holds 57,071 model-written captions that
 exist nowhere but the index, and the photographs they describe are on the NAS.
 
-    SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N] [--dry-run]
+    SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N]
+                          [--workers N] [--keep-local] [--dry-run]
+    SwiftSelect evict --manifest FILE [--dry-run]
 
 - **The manifest is JSONL**, one photograph a line — path, hash, bytes,
   description, keywords — emitted by `swiftphotolog writeback`. The backend
@@ -335,6 +337,25 @@ exist nowhere but the index, and the photographs they describe are on the NAS.
   link, and a fixed timeout tuned on local files gives up on a 117 MB DNG over
   Wi-Fi. `WriteBackPlan.timeoutSeconds` sizes it from the measured 19 MB/s with
   a 3x margin and a 12 s floor.
+- **exiftool's backup is kept until the picture is proven unchanged.** Each write
+  compares the image-data hash before and after, and only then deletes the
+  `_original`; a write killed on timeout removes the temp file it left behind.
+- **`--workers` lanes** overlap the fixed per-file cost on a wired link; on Wi-Fi
+  the link is the wall and lanes buy about 13%.
+- **iCloud placeholders are fetched before exiftool starts.** The allowance is
+  sized on every byte the lanes are fetching at once, at 8 MB/s with a 90 s
+  floor, because the provider shares one download between them: about 10-11
+  MB/s in all during a run, so eight 280 MB DNGs take around 200 s and a small
+  JPG queued behind them waits as long. A timed-out fetch is never cancelled -
+  the provider goes on downloading it - so its bytes keep counting against later
+  fetches until it lands. Forgetting them turned one slow file into ten failures
+  in a row (2026-09-26).
+- **`--keep-local` and `evict`.** The batched iCloud run keeps woken bytes so the
+  index can hash the rewritten files, then `evict` hands the batch back, eight at
+  once: each call is a ~0.55 s round trip to the provider whatever the size, and
+  a real 4,993-file batch took 10 minutes against 1 h 55 m one at a time. It
+  gives back only what the provider says it holds, and never touches a file
+  outside a provider - on the NAS that would be a delete.
 - **It stops on ten consecutive failures.** One unreadable file must not end a
   run; a dead mount must not spend a night logging 50,000 of them.
 - `--dry-run` reports what it would write and touches nothing; `--limit` caps a

@@ -544,6 +544,9 @@ the disk. The runner stays in the macOS target for the usual reason:
 Core cannot depend on it (see "Multi-platform target split"). It reaches the
 runner through a one-method `WriteBackWriter` protocol instead, which is also
 what lets the tests count writes without launching anything.
+`App/EvictCommand.swift` and `Services/EvictRun.swift` are the same shape for
+`evict`, with `CloudFile` (Core) answering presence, upload state, fetch and
+eviction behind injected closures so no test needs a cloud provider.
 
 **A `@main` type's `static func main()` is main-actor isolated.** A plain
 `Task { }` started there inherits that isolation, so it cannot begin while the
