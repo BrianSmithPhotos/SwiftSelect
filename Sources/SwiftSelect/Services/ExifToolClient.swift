@@ -706,7 +706,10 @@ struct ExifToolClient: MetadataWriter {
     /// contain no newline, but a description typed in the app could.
     private func runWrite(assignments: [String], paths: [String],
                           timeoutSeconds: Double) async throws -> Data {
-        let output = try await runAssignments(assignments: assignments, paths: paths,
+        // -P keeps the file's modification time. A photograph with no EXIF date is dated by it -
+        // here in ProcessMoveService, and in the photo index - so without it a caption write
+        // re-dated 457 index photographs to the day they were captioned.
+        let output = try await runAssignments(assignments: ["-P"] + assignments, paths: paths,
                                               timeoutSeconds: timeoutSeconds)
         await reconcileTIFFDigests(paths: paths, timeoutSeconds: timeoutSeconds)
         return output
@@ -737,7 +740,7 @@ struct ExifToolClient: MetadataWriter {
             return ext == "tif" || ext == "tiff"
         }
         guard !tiffs.isEmpty else { return }
-        _ = try? await run(arguments: ["-overwrite_original", "-IPTCDigest=new"] + tiffs,
+        _ = try? await run(arguments: ["-P", "-overwrite_original", "-IPTCDigest=new"] + tiffs,
                            timeoutSeconds: timeoutSeconds)
     }
 

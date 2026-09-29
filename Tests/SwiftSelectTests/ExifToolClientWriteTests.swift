@@ -396,6 +396,62 @@ final class ExifToolClientWriteTests: XCTestCase {
         XCTAssertNil(scan.captions[blank])
     }
 
+    // MARK: - Modification time
+
+    /// A photograph with no EXIF date is dated by its modification time, both by the photo index and
+    /// by ProcessMoveService, so a caption write must not move it. Before `-P` the write-back re-dated
+    /// 457 index photographs to the day they were captioned.
+    private static let longAgo = Date(timeIntervalSince1970: 1_600_000_000)
+
+    private func backdate(_ url: URL) throws {
+        try FileManager.default.setAttributes([.modificationDate: Self.longAgo], ofItemAtPath: url.path)
+    }
+
+    private func modified(_ url: URL) throws -> Date? {
+        try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+    }
+
+    func testAVerifiedWriteKeepsTheModificationTime() async throws {
+        let url = try makeTempFile()
+        try backdate(url)
+
+        try await ExifToolClient().write(title: nil, description: "Dated", keywords: ["a"], gps: nil,
+                                         timeoutSeconds: 12, verifyImageData: true, to: url)
+
+        XCTAssertEqual(try modified(url), Self.longAgo)
+    }
+
+    func testABatchWriteKeepsTheModificationTime() async throws {
+        let urls = try [makeTempFile(), makeTempFile()]
+        try urls.forEach(backdate)
+
+        _ = try await ExifToolClient().write(description: "Dated", keywords: [], gps: nil, to: urls)
+
+        for url in urls { XCTAssertEqual(try modified(url), Self.longAgo) }
+    }
+
+    /// TIFFs get a second, digest-only pass, which is a second rewrite.
+    func testATIFFWriteKeepsTheModificationTime() async throws {
+        let url = try makeTempFile(named: "\(UUID().uuidString).tif")
+        try backdate(url)
+
+        try await ExifToolClient().write(title: nil, description: "Dated", keywords: [], gps: nil,
+                                         subjectDistance: nil, to: url)
+
+        XCTAssertEqual(try modified(url), Self.longAgo)
+    }
+
+    /// Non-ASCII text goes through an argfile rather than argv.
+    func testAnArgFileWriteKeepsTheModificationTime() async throws {
+        let url = try makeTempFile()
+        try backdate(url)
+
+        try await ExifToolClient().write(title: nil, description: "Māori café", keywords: [], gps: nil,
+                                         to: url)
+
+        XCTAssertEqual(try modified(url), Self.longAgo)
+    }
+
     // MARK: - Image data verification (the headless write-back)
 
     func testAVerifiedWriteKeepsTheCaptionAndDeletesTheBackup() async throws {
