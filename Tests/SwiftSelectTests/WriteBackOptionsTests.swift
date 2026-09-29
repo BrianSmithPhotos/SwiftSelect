@@ -98,4 +98,14 @@ final class WriteBackOptionsTests: XCTestCase {
                         "--keep-local"])
         XCTAssertEqual(batched?.keepLocal, true)
     }
+
+    /// exiftool's refusals stand unless the refused batch asks otherwise.
+    func testLenientOnlyWhenAsked() throws {
+        let ordinary = try WriteBackOptions.parse(
+            arguments: ["SwiftSelect", "writeback", "--manifest", "m", "--log", "l"])
+        XCTAssertEqual(ordinary?.lenient, false)
+        let refused = try WriteBackOptions.parse(
+            arguments: ["SwiftSelect", "writeback", "--manifest", "m", "--log", "l", "--lenient"])
+        XCTAssertEqual(refused?.lenient, true)
+    }
 }

@@ -451,4 +451,81 @@ final class ExifToolClientWriteTests: XCTestCase {
         try await client.write(title: nil, description: "x", keywords: [], gps: nil,
                                timeoutSeconds: 12, to: url)
     }
+
+    // MARK: - The refused batch (lenient)
+
+    /// The phone JPEGs' fault, made: an InteropIFD whose entry count runs past its end. exiftool
+    /// writes a new EXIF block big-endian, so its one entry - InteropIndex, ASCII, 4 bytes, "R98" -
+    /// sits in the file as these 12 bytes, with the IFD's 2-byte entry count just before it.
+    private func makeBrokenInteropJPEG() async throws -> URL {
+        let url = try makeTempFile()
+        try await Self.exiftool(["-q", "-overwrite_original", "-InteropIndex=R98", url.path])
+        var bytes = try Data(contentsOf: url)
+        let entry = Data([0, 1, 0, 2, 0, 0, 0, 4]) + Data("R98\0".utf8)
+        let found = try XCTUnwrap(bytes.range(of: entry), "no InteropIFD entry to break")
+        bytes.replaceSubrange(found.lowerBound - 2..<found.lowerBound, with: [0xFF, 0xFF])
+        try bytes.write(to: url)
+        return url
+    }
+
+    func testABrokenInteropIFDIsRefusedByAnOrdinaryWrite() async throws {
+        let url = try await makeBrokenInteropJPEG()
+        do {
+            try await ExifToolClient().writeBack(description: "x", keywords: [],
+                                                 timeoutSeconds: 12, to: url)
+            XCTFail("exiftool should refuse a file whose EXIF block it cannot rewrite")
+        } catch let error as ExifToolError {
+            XCTAssertTrue(ExifToolClient.exifIsUnwritable(error), String(describing: error))
+        }
+    }
+
+    /// Lenient writes the IPTC and XMP halves, leaves no backup behind, and the image data check
+    /// inside writeBack has already passed by the time it returns.
+    func testALenientWriteGetsPastABrokenInteropIFD() async throws {
+        let url = try await makeBrokenInteropJPEG()
+        let client = ExifToolClient(lenient: true)
+
+        try await client.writeBack(description: "Recovered", keywords: ["kept"],
+                                   timeoutSeconds: 12, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["XMP-dc:Description"] as? String, "Recovered")
+        XCTAssertEqual(metadata["IPTC:Caption-Abstract"] as? String, "Recovered")
+        XCTAssertNil(metadata["IFD0:ImageDescription"])
+        let backup = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + "_original")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
+    }
+
+    /// An ordinary file keeps all three copies of the caption under lenient: the EXIF one is only
+    /// dropped when exiftool cannot write it.
+    func testALenientWriteOfAnOrdinaryFileKeepsTheEXIFDescription() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient(lenient: true)
+
+        try await client.writeBack(description: "All three", keywords: [],
+                                   timeoutSeconds: 12, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["IFD0:ImageDescription"] as? String, "All three")
+    }
+
+    func testLeniencyIsExiftoolsMinorErrorFlag() {
+        XCTAssertEqual(ExifToolClient.leniency(true), ["-m"])
+        XCTAssertEqual(ExifToolClient.leniency(false), [])
+    }
+
+    /// Only an InteropIFD failure drops the EXIF copy; a timeout or any other refusal stands.
+    func testOnlyAnInteropIFDFailureCountsAsUnwritableEXIF() {
+        XCTAssertTrue(ExifToolClient.exifIsUnwritable(.processFailed(
+            status: 1, stderr: "Error: Bad format (0) for InteropIFD entry 0 - a.jpg")))
+        XCTAssertFalse(ExifToolClient.exifIsUnwritable(.processFailed(
+            status: 1, stderr: "Error: Format error in file - a.gif")))
+        XCTAssertFalse(ExifToolClient.exifIsUnwritable(.timedOut))
+    }
+
+    func testWithoutEXIFDescriptionDropsOnlyThatAssignment() {
+        let assignments = ["-m", "-IPTC:Caption-Abstract=a", "-IFD0:ImageDescription=a", "-XMP-dc:Description=a"]
+        XCTAssertEqual(ExifToolClient.withoutEXIFDescription(assignments),
+                       ["-m", "-IPTC:Caption-Abstract=a", "-XMP-dc:Description=a"])
+    }
 }

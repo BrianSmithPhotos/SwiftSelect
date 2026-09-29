@@ -42,6 +42,10 @@ struct ExifToolClient: MetadataWriter {
     /// duplicate tags allowed, short tag names. See docs/SPEC.md §2.
     private static let readArguments = ["-j", "-G1", "-a", "-s"]
 
+    /// Only for the write-back's last batch, over the files an ordinary write refused - see
+    /// `leniency` and `exifIsUnwritable`. Every other caller keeps exiftool's refusals.
+    var lenient = false
+
     /// Reads full metadata for one file as exiftool's raw JSON object (one entry per requested tag
     /// group). Field-mapping to `PhotoAsset` happens one layer up.
     func readMetadata(at url: URL) async throws -> [String: Any] {
@@ -209,12 +213,18 @@ struct ExifToolClient: MetadataWriter {
         timeoutSeconds: Double, verifyImageData: Bool = false, to url: URL
     ) async throws {
         try MetadataWriteFieldRules.validate(gps: gps)
-        let assignments = Self.writeArguments(
+        let assignments = Self.leniency(lenient) + Self.writeArguments(
             title: title, description: description, keywords: keywords, gps: gps,
             subjectDistance: subjectDistance, instructions: instructions)
         do {
-            _ = try await runWrite(assignments: assignments, paths: [url.path],
-                                   timeoutSeconds: timeoutSeconds)
+            do {
+                _ = try await runWrite(assignments: assignments, paths: [url.path],
+                                       timeoutSeconds: timeoutSeconds)
+            } catch let error as ExifToolError where lenient && Self.exifIsUnwritable(error) {
+                // exiftool wrote nothing, so there is no backup to restore before trying again.
+                _ = try await runWrite(assignments: Self.withoutEXIFDescription(assignments),
+                                       paths: [url.path], timeoutSeconds: timeoutSeconds)
+            }
             if verifyImageData {
                 try await checkImageData(of: url, timeoutSeconds: timeoutSeconds)
             }
@@ -224,6 +234,27 @@ struct ExifToolClient: MetadataWriter {
             restoreBackupIfPresent(for: url)
             throw error
         }
+    }
+
+    /// `-m` lets exiftool write past its `[minor]` errors. Measured on the NAS write-back's refusals
+    /// (2026-09-29): 970 DxO DNGs and Nik TIFs carry an OM maker-note preview exiftool cannot read,
+    /// and with `-m` each wrote with its image data hash unchanged and no tag lost.
+    static func leniency(_ lenient: Bool) -> [String] {
+        lenient ? ["-m"] : []
+    }
+
+    /// A broken InteropIFD - 549 Samsung SGH-I917 phone JPEGs, "Truncated InteropIFD directory" or
+    /// "Bad format (0) for InteropIFD entry 0" - stops exiftool rewriting the EXIF block at all, and
+    /// `-m` does not help. IFD0:ImageDescription is the only EXIF field the write-back sets, and
+    /// those files have none, so without it the IPTC and XMP halves write and ImageIO still reads
+    /// the caption back.
+    static func exifIsUnwritable(_ error: ExifToolError) -> Bool {
+        guard case .processFailed(_, let stderr) = error else { return false }
+        return stderr.contains("InteropIFD")
+    }
+
+    static func withoutEXIFDescription(_ assignments: [String]) -> [String] {
+        assignments.filter { !$0.hasPrefix("-IFD0:ImageDescription=") }
     }
 
     /// Compares the picture - exiftool's ImageDataHash, metadata excluded - of the written file

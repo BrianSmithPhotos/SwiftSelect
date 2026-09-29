@@ -48,14 +48,19 @@ enum WriteBackCommand {
             say("keeping the bytes of anything woken, as asked - evict the batch once "
                 + "scan, hash, rekey and exif have been past it")
         }
+        if options.lenient {
+            say("lenient: past exiftool's minor errors, and IPTC and XMP alone where the EXIF "
+                + "block is broken")
+        }
         if options.dryRun { say("dry run: nothing will be written") }
         guard !todo.isEmpty else {
             say("nothing to do")
             return 0
         }
 
-        let run = WriteBackRun(writer: ExifToolClient(), quiet: quiet, dryRun: options.dryRun,
-                               workers: options.workers, keepLocal: options.keepLocal)
+        let run = WriteBackRun(writer: ExifToolClient(lenient: options.lenient), quiet: quiet,
+                               dryRun: options.dryRun, workers: options.workers,
+                               keepLocal: options.keepLocal)
         let outcome = await run.run(entries: todo, log: log, limit: options.limit)
 
         say("")

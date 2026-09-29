@@ -183,10 +183,13 @@ public struct WriteBackOptions: Equatable {
     /// after eviction, single-threaded where the write-back has eight lanes. The batch script
     /// evicts afterwards instead.
     public let keepLocal: Bool
+    /// Write the files an ordinary run refused: exiftool -m, and the IPTC and XMP halves alone
+    /// where the EXIF block cannot be rewritten. For one batch at the end, not the whole run.
+    public let lenient: Bool
 
     public init(manifest: String, logDirectory: String, quiet: String? = nil,
                 dryRun: Bool = false, limit: Int? = nil, workers: Int = 1,
-                keepLocal: Bool = false) {
+                keepLocal: Bool = false, lenient: Bool = false) {
         self.manifest = manifest
         self.logDirectory = logDirectory
         self.quiet = quiet
@@ -194,6 +197,7 @@ public struct WriteBackOptions: Equatable {
         self.limit = limit
         self.workers = workers
         self.keepLocal = keepLocal
+        self.lenient = lenient
     }
 
     /// nil when this is an ordinary launch - a double-clicked .app gets argv it never asked for,
@@ -204,6 +208,7 @@ public struct WriteBackOptions: Equatable {
         var values: [String: String] = [:]
         var dryRun = false
         var keepLocal = false
+        var lenient = false
         var index = 2
         while index < arguments.count {
             let argument = arguments[index]
@@ -213,6 +218,9 @@ public struct WriteBackOptions: Equatable {
                 index += 1
             case "--keep-local":
                 keepLocal = true
+                index += 1
+            case "--lenient":
+                lenient = true
                 index += 1
             case "--manifest", "--log", "--quiet", "--limit", "--workers":
                 guard index + 1 < arguments.count else {
@@ -247,12 +255,12 @@ public struct WriteBackOptions: Equatable {
         }
         return WriteBackOptions(manifest: manifest, logDirectory: log,
                                 quiet: values["--quiet"], dryRun: dryRun, limit: limit,
-                                workers: workers, keepLocal: keepLocal)
+                                workers: workers, keepLocal: keepLocal, lenient: lenient)
     }
 
     public static let usage = """
         usage: SwiftSelect writeback --manifest FILE --log DIR [--quiet SPEC] [--limit N]
-                                    [--workers N] [--keep-local] [--dry-run]
+                                    [--workers N] [--keep-local] [--lenient] [--dry-run]
 
           --manifest  the JSONL from `swiftphotolog writeback`
           --log       directory for writeback-done.jsonl and writeback-failed.jsonl
@@ -262,6 +270,8 @@ public struct WriteBackOptions: Equatable {
                       link and not on Wi-Fi, where the link is the wall
           --keep-local  keep the bytes of woken cloud placeholders instead of giving them
                         back as the run goes, for a batch the index chain has yet to see
+          --lenient   for the files a run refused: let exiftool past its minor errors, and
+                      write IPTC and XMP alone where the EXIF block is broken
           --dry-run   say what would be written and write nothing
         """
 }
