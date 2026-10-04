@@ -30,10 +30,12 @@ public protocol MetadataWriter {
     /// focus distance and a creative-dial look read per frame), so they're only exposed here, never
     /// in the batched overload below — see docs/SPEC.md §3. `subjectDistance` is metres, written to
     /// the standard `EXIF:SubjectDistance` so other apps can read it; `instructions` goes to
-    /// IPTC/XMP Instructions. `nil` or empty leaves either tag untouched.
+    /// IPTC/XMP Instructions. `nil` or empty leaves either tag untouched. `identity` is the file's
+    /// `ShotIdentity` ids, per-file for the same reason; `nil` leaves them untouched.
     func write(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
-        subjectDistance: Double?, instructions: String?, to url: URL) async throws
+        subjectDistance: Double?, instructions: String?, identity: ShotTags?, to url: URL
+    ) async throws
 
     /// Writes the same description/keywords/GPS to every file in `urls`.
     func write(description: String, keywords: [String], gps: GPSCoordinate?, to urls: [URL]) async throws

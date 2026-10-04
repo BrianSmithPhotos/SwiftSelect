@@ -20,6 +20,10 @@ public struct PhotoAsset: Identifiable, Hashable {
     /// filled in the same lazy per-selection `exiftool` pass as `artFilterToken`.
     public var focusDistance: String = ""
 
+    /// The camera body's serial number, the first half of a `ShotIdentity` id. It lives in the
+    /// Olympus maker note, so the Mac fills it from the folder-load `exiftool` pass.
+    public var cameraSerial: String = ""
+
     public var capturedAt: Date?
     public var artFilterToken: String?
     /// The in-camera creative-dial settings (see `CameraLookParsing`), read from the same lazy

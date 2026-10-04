@@ -215,17 +215,33 @@ final class ProcessMoveServiceTests: XCTestCase {
             "/library/3 March/09")
     }
 
+    func testIdentityReachesTheMetadataWrite() async throws {
+        let sourceURL = try makeSourceJPEG(in: try makeTempDirectory())
+        let asset = PhotoAsset(id: sourceURL)
+        let identity = ShotTags(
+            documentID: "S-2", originalDocumentID: "S-1", setID: "S-1")
+
+        let spy = OrderSpyWriter()
+        _ = try await ProcessMoveService(metadataWriter: spy).processAndCopy(
+            asset: asset, renameContext: renameContext(for: asset),
+            libraryRoot: try makeTempDirectory(), identity: identity)
+
+        XCTAssertEqual(spy.identityWritten, identity)
+    }
+
     /// Records the state of the destination folder at the moment metadata is written, so the test
     /// can assert on ordering rather than just the end result.
     private final class OrderSpyWriter: MetadataWriter, @unchecked Sendable {
         var urlWrittenTo: URL?
+        var identityWritten: ShotTags?
         var namesVisibleDuringWrite: [String] = []
 
         func write(
             title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
-            subjectDistance: Double?, instructions: String?, to url: URL
+            subjectDistance: Double?, instructions: String?, identity: ShotTags?, to url: URL
         ) async throws {
             urlWrittenTo = url
+            identityWritten = identity
             let directory = url.deletingLastPathComponent()
             namesVisibleDuringWrite =
                 (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []

@@ -116,11 +116,13 @@ struct ExifToolClient: MetadataWriter {
     /// Olympus CameraSettings `0x0605` and suppresses unnamed tags without it.
     ///
     /// `Caption-Abstract` rides along because ImageIO reads it back empty on camera-original
-    /// JPEGs, and this pass already visits every file at folder load.
+    /// JPEGs, and this pass already visits every file at folder load. `SerialNumber` rides along
+    /// for `ShotIdentity`: it sits in the Olympus maker note, which ImageIO does not expose.
     private static let groupingArguments = [
         "-j", "-s", "-n", "-u",
         "-DriveMode", "-Olympus_CameraSettings_0x0605", "-StackedImage",
         "-ArtFilterEffect", "-PictureMode", "-ExposureCompensation", "-Caption-Abstract",
+        "-SerialNumber",
     ]
 
     /// Five tags is a fraction of a full read's output, so this runs in much larger chunks than
@@ -132,6 +134,7 @@ struct ExifToolClient: MetadataWriter {
     struct FolderScan {
         var signals: [URL: CaptureSignals] = [:]
         var captions: [URL: String] = [:]
+        var serials: [URL: String] = [:]
     }
 
     /// Reads a whole folder's `FolderScan` at once.
@@ -153,6 +156,9 @@ struct ExifToolClient: MetadataWriter {
                 scan.signals[url] = Self.groupingSignals(from: entry)
                 let caption = Self.text(entry["Caption-Abstract"])
                 if !caption.isEmpty { scan.captions[url] = caption }
+                // `-n` returns the maker note's fixed-width field, serial then padding spaces.
+                let serial = Self.text(entry["SerialNumber"]).trimmingCharacters(in: .whitespaces)
+                if !serial.isEmpty { scan.serials[url] = serial }
             }
         }
         return scan
@@ -192,11 +198,12 @@ struct ExifToolClient: MetadataWriter {
     /// half-written) file so the write is all-or-nothing from the caller's perspective.
     func write(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
-        subjectDistance: Double? = nil, instructions: String? = nil, to url: URL
+        subjectDistance: Double? = nil, instructions: String? = nil, identity: ShotTags? = nil,
+        to url: URL
     ) async throws {
         try await write(title: title, description: description, keywords: keywords, gps: gps,
                         subjectDistance: subjectDistance, instructions: instructions,
-                        timeoutSeconds: Self.singleFileTimeout, to: url)
+                        identity: identity, timeoutSeconds: Self.singleFileTimeout, to: url)
     }
 
     /// The same write with the allowance named rather than fixed. An overload rather than a
@@ -209,13 +216,13 @@ struct ExifToolClient: MetadataWriter {
     /// on that arithmetic alone. See `WriteBackPlan.timeoutSeconds(bytes:)`.
     func write(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
-        subjectDistance: Double? = nil, instructions: String? = nil,
+        subjectDistance: Double? = nil, instructions: String? = nil, identity: ShotTags? = nil,
         timeoutSeconds: Double, verifyImageData: Bool = false, to url: URL
     ) async throws {
         try MetadataWriteFieldRules.validate(gps: gps)
         let assignments = Self.leniency(lenient) + Self.writeArguments(
             title: title, description: description, keywords: keywords, gps: gps,
-            subjectDistance: subjectDistance, instructions: instructions)
+            subjectDistance: subjectDistance, instructions: instructions, identity: identity)
         do {
             do {
                 _ = try await runWrite(assignments: assignments, paths: [url.path],
@@ -322,7 +329,7 @@ struct ExifToolClient: MetadataWriter {
 
         let assignments = Self.writeArguments(
             title: nil, description: description, keywords: keywords, gps: gps, subjectDistance: nil,
-            instructions: nil)
+            instructions: nil, identity: nil)
         do {
             _ = try await runWrite(assignments: assignments, paths: urls.map(\.path),
                                    timeoutSeconds: Self.batchTimeoutPerFile * Double(urls.count))
@@ -355,9 +362,9 @@ struct ExifToolClient: MetadataWriter {
     /// (blank `-IPTC:Keywords=`/`-XMP-dc:Subject=`) before being rewritten one `-tag=value` pair at
     /// a time — the idempotent way to "replace the keyword list" with exiftool, since its `+=`
     /// append operator would duplicate keywords on every re-save.
-    private static func writeArguments(
+    static func writeArguments(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
-        subjectDistance: Double?, instructions: String?
+        subjectDistance: Double?, instructions: String?, identity: ShotTags?
     ) -> [String] {
         // Declare the legacy IIM block UTF-8, first, so everything below it is stored as written.
         // Without this exiftool encodes IIM as cp1252 and anything outside it becomes a literal "?":
@@ -444,6 +451,14 @@ struct ExifToolClient: MetadataWriter {
         if let instructions, !instructions.isEmpty {
             arguments.append("-IPTC:SpecialInstructions=\(String(instructions.prefix(256)))")
             arguments.append("-XMP-photoshop:Instructions=\(instructions)")
+        }
+
+        // The `ShotIdentity` ids. XMP only: DxO PhotoLab mirrors the set id into the legacy IIM
+        // field by itself on export, so writing that half here would add nothing a reader needs.
+        if let identity {
+            arguments.append("-XMP-xmpMM:DocumentID=\(identity.documentID)")
+            arguments.append("-XMP-xmpMM:OriginalDocumentID=\(identity.originalDocumentID)")
+            arguments.append("-XMP-photoshop:TransmissionReference=\(identity.setID)")
         }
 
         // Recompute the IPTC digest, because this write always changes the legacy IIM block.

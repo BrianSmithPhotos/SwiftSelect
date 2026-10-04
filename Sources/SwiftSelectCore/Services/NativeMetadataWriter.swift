@@ -30,9 +30,12 @@ public enum NativeMetadataWriteError: Error {
 public struct NativeMetadataWriter: MetadataWriter {
     public init() {}
 
+    /// `identity` is accepted and not written yet: the sidecar has no place for the
+    /// `ShotIdentity` ids until the iPad can supply a camera serial.
     public func write(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
-        subjectDistance: Double? = nil, instructions: String? = nil, to url: URL
+        subjectDistance: Double? = nil, instructions: String? = nil, identity: ShotTags? = nil,
+        to url: URL
     ) async throws {
         try MetadataWriteFieldRules.validate(gps: gps)
         let data = try Self.xmpData(

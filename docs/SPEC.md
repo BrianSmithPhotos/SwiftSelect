@@ -258,6 +258,14 @@ deterministically, and copy files into local storage.
     on write makes it visible downstream. Per-file-unique like Title, so it rides the single-file
     write path only (never the batched overload), and is written only when the MakerNote yields a
     usable finite positive distance — a blank field, an "inf" reading, or `0` writes nothing.
+  - Shot identity → `XMP-xmpMM:DocumentID` (this file's frame), `XMP-xmpMM:OriginalDocumentID`
+    (the RAW it came from) and `XMP-photoshop:TransmissionReference` (the capture set). Each is
+    `serial-frame`, e.g. `BJSA13381-1085082`: the camera writes no identifier of its own, and a
+    content hash stops matching once a RAW is developed. Derived rather than random so the Mac, the
+    iPad and a backfill agree; see `ShotIdentity` for the parent rule. Proven 2026-10-04 to survive
+    DxO PhotoLab and Silver Efex into TIFF and JPEG exports, where the JPEG loses the maker note
+    and so the serial. Written on process/move only, Mac only for now (the serial is a maker-note
+    field ImageIO cannot read).
   - Camera look → `IPTC:SpecialInstructions` + `XMP-photoshop:Instructions`. The in-camera
     creative-dial settings (profile hue sliders, Colour Creator colour/strength, mono filter, grain,
     shading, tone curve, the profile's own contrast/sharpness/saturation, the art filter with its

@@ -40,8 +40,12 @@ public struct ProcessMoveService {
     ///
     /// `renameContext` supplies the fields `RenameService` needs to compute the destination
     /// filename — see its doc comment for why that's a separate type from `PhotoAsset`.
+    ///
+    /// `identity` is the asset's `ShotIdentity` ids. It is passed in rather than worked out here
+    /// because it depends on the rest of the capture set, which this method never sees.
     public func processAndCopy(
-        asset: PhotoAsset, renameContext: RenameContext, libraryRoot: URL
+        asset: PhotoAsset, renameContext: RenameContext, libraryRoot: URL,
+        identity: ShotTags? = nil
     ) async throws -> ProcessMoveResult {
         guard FileManager.default.fileExists(atPath: asset.url.path) else {
             throw ProcessMoveError.sourceNotFound(asset.url)
@@ -87,6 +91,7 @@ public struct ProcessMoveService {
                 gps: Self.gpsCoordinate(for: asset),
                 subjectDistance: subjectDistance,
                 instructions: cameraLook.isEmpty ? nil : cameraLook,
+                identity: identity,
                 to: stagingURL)
             try FileManager.default.moveItem(at: stagingURL, to: destinationURL)
             Self.moveSidecarIfPresent(from: stagingURL, to: destinationURL)

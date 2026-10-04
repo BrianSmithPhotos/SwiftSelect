@@ -396,6 +396,65 @@ final class ExifToolClientWriteTests: XCTestCase {
         XCTAssertNil(scan.captions[blank])
     }
 
+    // MARK: - Shot identity
+
+    private static let identity = ShotTags(
+        documentID: "BJSA13381-1078919", originalDocumentID: "BJSA13381-1078918",
+        setID: "BJSA13381-1078910")
+
+    func testIdentityRoundTripsThroughReadMetadata() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+
+        try await client.write(
+            title: nil, description: "", keywords: [], gps: nil, identity: Self.identity, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["XMP-xmpMM:DocumentID"] as? String, "BJSA13381-1078919")
+        XCTAssertEqual(metadata["XMP-xmpMM:OriginalDocumentID"] as? String, "BJSA13381-1078918")
+        XCTAssertEqual(
+            metadata["XMP-photoshop:TransmissionReference"] as? String, "BJSA13381-1078910")
+    }
+
+    /// A later save that carries no identity - a description edit in the metadata panel - must
+    /// leave the ids a process/move already wrote.
+    func testAWriteWithoutIdentityLeavesExistingIDsAlone() async throws {
+        let url = try makeTempFile()
+        let client = ExifToolClient()
+        try await client.write(
+            title: nil, description: "", keywords: [], gps: nil, identity: Self.identity, to: url)
+
+        try await client.write(
+            title: nil, description: "edited", keywords: [], gps: nil, to: url)
+
+        let metadata = try await client.readMetadata(at: url)
+        XCTAssertEqual(metadata["XMP-xmpMM:OriginalDocumentID"] as? String, "BJSA13381-1078918")
+        XCTAssertEqual(
+            metadata["XMP-photoshop:TransmissionReference"] as? String, "BJSA13381-1078910")
+    }
+
+    /// The serial rides the folder-load pass. The test file takes the standard EXIF serial, since
+    /// an Olympus maker note cannot be created from scratch; exiftool answers `-SerialNumber` from
+    /// either.
+    func testFolderScanReadsSerials() async throws {
+        let withSerial = try makeTempFile()
+        let blank = try makeTempFile()
+        let client = ExifToolClient()
+        let stamp = Process()
+        stamp.executableURL = URL(fileURLWithPath: ExifToolClient.exiftoolPath)
+        stamp.arguments = [
+            "-q", "-overwrite_original", "-ExifIFD:SerialNumber=TEST12345", withSerial.path,
+        ]
+        try stamp.run()
+        stamp.waitUntilExit()
+        XCTAssertEqual(stamp.terminationStatus, 0)
+
+        let scan = try await client.readFolderScan(at: [withSerial, blank])
+
+        XCTAssertEqual(scan.serials[withSerial], "TEST12345")
+        XCTAssertNil(scan.serials[blank])
+    }
+
     // MARK: - Modification time
 
     /// A photograph with no EXIF date is dated by its modification time, both by the photo index and

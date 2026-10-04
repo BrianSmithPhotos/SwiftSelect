@@ -525,6 +525,9 @@ final class SourceBrowserViewModel {
                 var (assets, folders) = try await (assetsTask, subfoldersTask)
                 let scan = (try? await exifTool.readFolderScan(at: assets.map(\.url))) ?? .init()
                 applyCaptions(scan.captions, to: &assets)
+                for index in assets.indices {
+                    assets[index].cameraSerial = scan.serials[assets[index].url] ?? ""
+                }
                 skippedPaths = await skippedAssetPaths(inFolder: folderURL)
                 processedAssetPaths = await loadProcessedAssetPaths(inFolder: folderURL)
                 discardSpentDerivatives(
@@ -583,6 +586,18 @@ final class SourceBrowserViewModel {
     /// ImageIO's scan reads the caption back empty on camera-original JPEGs, so the folder-load
     /// exiftool pass supplies it; without this the description only appears once a photo is
     /// selected and read individually.
+    /// The `ShotIdentity` ids for every asset in the folder.
+    ///
+    /// Skipping splits a set into an active half and a skipped half that share one id (see
+    /// `SkipPartition`), so the halves are joined back first: the set id is the lowest frame of the
+    /// whole capture, and a JPEG's parent RAW may be sitting in the skipped half.
+    private func shotTagsByAssetID() -> [PhotoAsset.ID: ShotTags] {
+        let membersBySet = Dictionary(grouping: captureSets + skippedCaptureSets, by: \.id)
+            .mapValues { $0.flatMap(\.members) }
+        return ShotIdentity.tags(
+            forSets: Array(membersBySet.values), cameraSets: automaticCaptureSets.map(\.members))
+    }
+
     private func applyCaptions(_ captions: [URL: String], to assets: inout [PhotoAsset]) {
         for index in assets.indices {
             if let caption = captions[assets[index].url] { assets[index].descriptionText = caption }
@@ -1950,6 +1965,7 @@ final class SourceBrowserViewModel {
             await loadArtFilterTokens(for: assets.filter { !$0.isVideo })
             let assetByID = Dictionary(
                 uniqueKeysWithValues: captureSets.flatMap(\.members).map { ($0.id, $0) })
+            let identityByID = shotTagsByAssetID()
             var failures: [String] = []
             var processedPaths: [String] = []
             var developedOriginals: [URL] = []
@@ -1969,7 +1985,8 @@ final class SourceBrowserViewModel {
                     } else {
                         let context = Self.renameContext(for: asset, batch: sessionBatch)
                         _ = try await processMoveService.processAndCopy(
-                            asset: asset, renameContext: context, libraryRoot: libraryRoot)
+                            asset: asset, renameContext: context, libraryRoot: libraryRoot,
+                            identity: identityByID[asset.id])
                     }
                     processedPaths.append(asset.url.path)
                     if let original = asset.derivedFrom {
