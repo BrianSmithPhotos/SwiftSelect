@@ -179,4 +179,41 @@ final class ShotIdentityTests: XCTestCase {
         XCTAssertEqual(
             ShotIdentity.tags(forSets: [set], cameraSets: [set]), ShotIdentity.tags(for: set))
     }
+
+    // MARK: - applyingSerials
+
+    private func modelAsset(_ name: String, model: String, serial: String = "") -> PhotoAsset {
+        var asset = PhotoAsset(id: url(name))
+        asset.cameraModel = model
+        asset.cameraSerial = serial
+        return asset
+    }
+
+    func testASerialIsFilledInFromTheModelTable() {
+        let filled = ShotIdentity.applyingSerials(
+            ["OM-3": "BJSA13381"], to: [modelAsset("H1085082.ORF", model: "OM-3")])
+
+        XCTAssertEqual(ShotIdentity.tags(for: filled).values.first?.documentID, "BJSA13381-1085082")
+    }
+
+    func testTheModelMatchIgnoresCaseAndPadding() {
+        let filled = ShotIdentity.applyingSerials(
+            [" om-3 ": "BJSA13381"], to: [modelAsset("H1085082.ORF", model: "OM-3")])
+
+        XCTAssertEqual(filled.first?.cameraSerial, "BJSA13381")
+    }
+
+    func testAModelWithNoEntryGetsNoIDs() {
+        let filled = ShotIdentity.applyingSerials(
+            ["OM-3": "BJSA13381"], to: [modelAsset("P1010001.ORF", model: "E-M1MarkII")])
+
+        XCTAssertTrue(ShotIdentity.tags(for: filled).isEmpty)
+    }
+
+    func testASerialReadFromTheFileIsKept() {
+        let filled = ShotIdentity.applyingSerials(
+            ["OM-3": "WRONG"], to: [modelAsset("H1085082.ORF", model: "OM-3", serial: "BJSA13381")])
+
+        XCTAssertEqual(filled.first?.cameraSerial, "BJSA13381")
+    }
 }

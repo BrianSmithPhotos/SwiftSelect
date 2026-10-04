@@ -90,6 +90,30 @@ public enum ShotIdentity {
         return result
     }
 
+    /// Fills in each member's serial from a camera-model-to-serial table, for a device that cannot
+    /// read it from the file.
+    ///
+    /// The OM-3 keeps its serial in the Olympus maker note, which only exiftool reads; ImageIO on
+    /// the iPad sees the model but not the serial. So the iPad holds the pairing as a setting. A
+    /// serial already on the asset wins, and a model with no entry stays blank, which yields no ids
+    /// rather than wrong ones.
+    public static func applyingSerials(
+        _ serialsByModel: [String: String], to members: [PhotoAsset]
+    ) -> [PhotoAsset] {
+        let table = Dictionary(
+            serialsByModel.map { (normalizedModel($0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+        return members.map { member in
+            guard member.cameraSerial.isEmpty else { return member }
+            var member = member
+            member.cameraSerial = table[normalizedModel(member.cameraModel)] ?? ""
+            return member
+        }
+    }
+
+    private static func normalizedModel(_ model: String) -> String {
+        model.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
     /// Frames compare as numbers, so `999` sorts before `1000`. A name with no digits sorts last
     /// and then yields no id.
     private static func frameValue(_ url: URL) -> Int {
@@ -116,4 +140,10 @@ public struct ShotTags: Equatable, Sendable {
         self.originalDocumentID = originalDocumentID
         self.setID = setID
     }
+
+    /// XMP paths shared by the sidecar writer and its parser.
+    static let xmpMMNamespace = "http://ns.adobe.com/xap/1.0/mm/"
+    static let documentIDPath = "xmpMM:DocumentID"
+    static let originalDocumentIDPath = "xmpMM:OriginalDocumentID"
+    static let setIDPath = "photoshop:TransmissionReference"
 }

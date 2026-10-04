@@ -8,12 +8,19 @@ public struct StagedMetadataDraft: Equatable {
     public var description: String
     public var keywords: [String]
     public var gps: GPSCoordinate?
+    /// Present only in a sidecar written at Process & Move time by a device that knows the camera
+    /// serial; a draft staged by a plain save has none.
+    public var identity: ShotTags?
 
-    public init(title: String?, description: String, keywords: [String], gps: GPSCoordinate?) {
+    public init(
+        title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
+        identity: ShotTags? = nil
+    ) {
         self.title = title
         self.description = description
         self.keywords = keywords
         self.gps = gps
+        self.identity = identity
     }
 }
 

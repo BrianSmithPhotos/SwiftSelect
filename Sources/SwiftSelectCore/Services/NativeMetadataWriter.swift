@@ -30,8 +30,9 @@ public enum NativeMetadataWriteError: Error {
 public struct NativeMetadataWriter: MetadataWriter {
     public init() {}
 
-    /// `identity` is accepted and not written yet: the sidecar has no place for the
-    /// `ShotIdentity` ids until the iPad can supply a camera serial.
+    /// `identity` goes into the sidecar under the same three XMP fields `ExifToolClient` writes
+    /// into a file, so the Mac's import can carry the iPad's capture sets (merges included) through
+    /// to the library copy.
     public func write(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
         subjectDistance: Double? = nil, instructions: String? = nil, identity: ShotTags? = nil,
@@ -40,7 +41,7 @@ public struct NativeMetadataWriter: MetadataWriter {
         try MetadataWriteFieldRules.validate(gps: gps)
         let data = try Self.xmpData(
             title: title, description: description, keywords: keywords, gps: gps,
-            subjectDistance: subjectDistance, instructions: instructions)
+            subjectDistance: subjectDistance, instructions: instructions, identity: identity)
         try data.write(to: Self.sidecarURL(for: url), options: .atomic)
     }
 
@@ -68,7 +69,7 @@ public struct NativeMetadataWriter: MetadataWriter {
 
     private static func xmpData(
         title: String?, description: String, keywords: [String], gps: GPSCoordinate?,
-        subjectDistance: Double?, instructions: String?
+        subjectDistance: Double?, instructions: String?, identity: ShotTags?
     ) throws -> Data {
         let metadata = CGImageMetadataCreateMutable()
 
@@ -120,6 +121,21 @@ public struct NativeMetadataWriter: MetadataWriter {
             CGImageMetadataSetValueMatchingImageProperty(
                 metadata, kCGImagePropertyIPTCDictionary, kCGImagePropertyIPTCSpecialInstructions,
                 instructions as CFString)
+        }
+
+        if let identity {
+            // xmpMM is not one of ImageIO's built-in namespaces, so it has to be registered before
+            // a path can name it; photoshop is built in.
+            CGImageMetadataRegisterNamespaceForPrefix(
+                metadata, ShotTags.xmpMMNamespace as CFString, "xmpMM" as CFString, nil)
+            let values = [
+                ShotTags.documentIDPath: identity.documentID,
+                ShotTags.originalDocumentIDPath: identity.originalDocumentID,
+                ShotTags.setIDPath: identity.setID,
+            ]
+            for (path, value) in values {
+                CGImageMetadataSetValueWithPath(metadata, nil, path as CFString, value as CFString)
+            }
         }
 
         guard let xmpData = CGImageMetadataCreateXMPData(metadata, nil) else {

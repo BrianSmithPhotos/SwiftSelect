@@ -224,6 +224,15 @@ final class PhotoBrowserViewModel {
         (UserDefaults.standard.array(forKey: PhotoBrowserViewModel.compactPromptModelsKey) as? [String])
         .map(Set.init) ?? ["mlx:mlx-community/FastVLM-0.5B-bf16"]
     private static let compactPromptModelsKey = "compactPromptModels"
+
+    /// Camera model to body serial, e.g. `OM-3` to `BJSA13381`, for `ShotIdentity`. The iPad needs
+    /// it as a setting because the OM-3 keeps its serial in the Olympus maker note, which ImageIO
+    /// cannot read. `UserDefaults`-persisted, edited in `SettingsView`. A model with no entry gets
+    /// no ids written, and the Mac's import then has none to carry.
+    private(set) var cameraSerials: [String: String] =
+        UserDefaults.standard.dictionary(forKey: PhotoBrowserViewModel.cameraSerialsKey)
+        as? [String: String] ?? [:]
+    private static let cameraSerialsKey = "cameraSerialsByModel"
     /// Drives the Settings button label ("Locate…" vs "Change…") and whether Refresh is enabled.
     /// Seeded from the stored bookmark so a relaunch with a previously-located file starts enabled.
     private(set) var hasTimelineBookmark: Bool =
@@ -989,6 +998,7 @@ final class PhotoBrowserViewModel {
         processedFileCount = 0
         processTotalCount = assets.count
         processStatusMessage = "Processing \(assets.count) file(s)…"
+        let identityByID = shotTagsByAssetID()
         Task {
             defer { isProcessing = false }
             guard let stagingStore = await ensureSidecarStagingStore() else { return }
@@ -1026,7 +1036,8 @@ final class PhotoBrowserViewModel {
                             batch: sessionBatch,
                             artFilterToken: asset.artFilterToken)
                         _ = try await processMoveService.processAndCopy(
-                            asset: asset, renameContext: context, libraryRoot: libraryRootURL)
+                            asset: asset, renameContext: context, libraryRoot: libraryRootURL,
+                            identity: identityByID[asset.id])
                     }
                     processedPaths.append(asset.url.path)
                 } catch {
@@ -1699,6 +1710,28 @@ final class PhotoBrowserViewModel {
             if preset.hasPrefix("mlx:") { return preset.contains("FastVLM") || preset.contains("gemma-3-4b") }
             return true
         }
+    }
+
+    /// Called from `SettingsView`'s Camera Serials section. A blank serial removes the entry.
+    func setCameraSerial(_ serial: String, forModel model: String) {
+        let model = model.trimmingCharacters(in: .whitespaces)
+        let serial = serial.trimmingCharacters(in: .whitespaces)
+        guard !model.isEmpty else { return }
+        cameraSerials[model] = serial.isEmpty ? nil : serial
+        UserDefaults.standard.set(cameraSerials, forKey: Self.cameraSerialsKey)
+    }
+
+    /// The `ShotIdentity` ids for every still in the folder, from the Settings serial table.
+    /// Mirrors the Mac app's `shotTagsByAssetID()`: set ids follow a manual merge, parents come from
+    /// the camera's own sets.
+    private func shotTagsByAssetID() -> [PhotoAsset.ID: ShotTags] {
+        func members(_ set: CaptureSet) -> [PhotoAsset] {
+            ShotIdentity.applyingSerials(cameraSerials, to: set.members)
+        }
+        let membersBySet = Dictionary(grouping: captureSets + skippedCaptureSets, by: \.id)
+            .mapValues { $0.flatMap(members) }
+        return ShotIdentity.tags(
+            forSets: Array(membersBySet.values), cameraSets: automaticCaptureSets.map(members))
     }
 
     /// Called from `SettingsView`'s per-model Prompt Style toggle. Persists the set.

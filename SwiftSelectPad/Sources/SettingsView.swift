@@ -23,6 +23,8 @@ struct SettingsView: View {
     @State private var geminiAPIKey = ""
     @State private var eBirdAPIKey = ""
     @State private var isConfirmingClearStagedEdits = false
+    @State private var newCameraModel = ""
+    @State private var newCameraSerial = ""
 
     var body: some View {
         NavigationStack {
@@ -116,6 +118,39 @@ struct SettingsView: View {
                     Text(
                         "Turn on for small models that echo placeholder keywords or over-apply bird/flower "
                         + "identification (e.g. FastVLM-0.5B). Larger models work better with it off.")
+                }
+
+                Section {
+                    ForEach(viewModel.cameraSerials.sorted(by: { $0.key < $1.key }), id: \.key) { entry in
+                        LabeledContent(entry.key, value: entry.value)
+                            .swipeActions {
+                                Button("Delete", role: .destructive) {
+                                    viewModel.setCameraSerial("", forModel: entry.key)
+                                }
+                            }
+                    }
+                    TextField("Camera model (e.g. OM-3)", text: $newCameraModel)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.characters)
+                    TextField("Serial number", text: $newCameraSerial)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.characters)
+                    Button("Add") {
+                        viewModel.setCameraSerial(newCameraSerial, forModel: newCameraModel)
+                        newCameraModel = ""
+                        newCameraSerial = ""
+                    }
+                    .disabled(
+                        newCameraModel.trimmingCharacters(in: .whitespaces).isEmpty
+                            || newCameraSerial.trimmingCharacters(in: .whitespaces).isEmpty)
+                } header: {
+                    Text("Camera Serials")
+                } footer: {
+                    Text(
+                        "Process & Move stamps each photo with a shot id made of the camera's serial and "
+                        + "the frame number, so exports can be traced back to their RAW. The iPad can't "
+                        + "read the serial from an OM-3 file, so enter it once here. The model must match "
+                        + "the camera keyword the app adds (e.g. OM-3). Swipe a row to delete it.")
                 }
 
                 Section {

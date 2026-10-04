@@ -264,8 +264,10 @@ deterministically, and copy files into local storage.
     content hash stops matching once a RAW is developed. Derived rather than random so the Mac, the
     iPad and a backfill agree; see `ShotIdentity` for the parent rule. Proven 2026-10-04 to survive
     DxO PhotoLab and Silver Efex into TIFF and JPEG exports, where the JPEG loses the maker note
-    and so the serial. Written on process/move only, Mac only for now (the serial is a maker-note
-    field ImageIO cannot read).
+    and so the serial. Written on process/move only. The iPad cannot read the serial (a maker-note
+    field ImageIO does not expose), so it takes it from a Settings table of camera model to
+    serial, writes the ids into the XMP sidecar, and the Mac's import carries them into the
+    library copy and any JPEG it develops. A model with no entry gets no ids.
   - Camera look → `IPTC:SpecialInstructions` + `XMP-photoshop:Instructions`. The in-camera
     creative-dial settings (profile hue sliders, Colour Creator colour/strength, mono filter, grain,
     shading, tone curve, the profile's own contrast/sharpness/saturation, the art filter with its

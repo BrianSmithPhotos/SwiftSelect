@@ -48,7 +48,20 @@ public enum SidecarDraftParsing {
         }
 
         return StagedMetadataDraft(
-            title: title?.isEmpty == false ? title : nil, description: description, keywords: keywords, gps: gps)
+            title: title?.isEmpty == false ? title : nil, description: description, keywords: keywords, gps: gps,
+            identity: identity(metadata))
+    }
+
+    /// All three ids or none: a sidecar with only some of them was not written by this app.
+    private static func identity(_ metadata: CGImageMetadata) -> ShotTags? {
+        func value(_ path: String) -> String? {
+            CGImageMetadataCopyStringValueWithPath(metadata, nil, path as CFString) as String?
+        }
+        guard let documentID = value(ShotTags.documentIDPath),
+            let originalDocumentID = value(ShotTags.originalDocumentIDPath),
+            let setID = value(ShotTags.setIDPath)
+        else { return nil }
+        return ShotTags(documentID: documentID, originalDocumentID: originalDocumentID, setID: setID)
     }
 
     /// `dc:title`/`dc:description` are lang-alt structures (one entry per language, tagged

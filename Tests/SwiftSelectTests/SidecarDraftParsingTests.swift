@@ -87,4 +87,33 @@ final class SidecarDraftParsingTests: XCTestCase {
 
         XCTAssertThrowsError(try SidecarDraftParsing.draft(at: sidecarURL))
     }
+
+    func testIdentityRoundTripsThroughTheSidecar() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("orf")
+        let sidecar = NativeMetadataWriter.sidecarURL(for: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: sidecar) }
+        let identity = ShotTags(
+            documentID: "BJSA13381-1000010", originalDocumentID: "BJSA13381-1000009",
+            setID: "BJSA13381-1000001")
+
+        try await NativeMetadataWriter().write(
+            title: nil, description: "d", keywords: ["k"], gps: nil, identity: identity, to: url)
+
+        XCTAssertEqual(try SidecarDraftParsing.draft(at: sidecar)?.identity, identity)
+    }
+
+    func testASidecarWithoutIDsHasNoIdentity() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("orf")
+        let sidecar = NativeMetadataWriter.sidecarURL(for: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: sidecar) }
+
+        try await NativeMetadataWriter().write(
+            title: nil, description: "d", keywords: ["k"], gps: nil, to: url)
+
+        let draft = try SidecarDraftParsing.draft(at: sidecar)
+        XCTAssertNil(draft?.identity)
+        XCTAssertEqual(draft?.keywords, ["k"])
+    }
 }

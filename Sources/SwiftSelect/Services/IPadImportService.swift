@@ -221,11 +221,12 @@ struct IPadImportService {
 
         do {
             let result = try await processMoveService.processAndCopy(
-                asset: asset, renameContext: context, libraryRoot: libraryRoot)
+                asset: asset, renameContext: context, libraryRoot: libraryRoot,
+                identity: draft.identity)
             // Develop before the source is trashed — it is the RAW being read.
             let developed = isMarkedForDevelop
                 ? await developRAW(asset, sequence: parsedName.sequence, batch: parsedName.batch,
-                    libraryRoot: libraryRoot)
+                    libraryRoot: libraryRoot, identity: draft.identity)
                 : (destinationURL: nil, failureReason: nil)
             discardImportedSource(at: asset.url, sidecarURL: sidecarURL)
             return IPadImportOutcome(
@@ -247,7 +248,7 @@ struct IPadImportService {
     /// same file again. `derivedFrom` is what keeps `sooc` off a derivative — a developed file is
     /// emphatically not straight out of camera.
     private func developRAW(
-        _ asset: PhotoAsset, sequence: String, batch: String, libraryRoot: URL
+        _ asset: PhotoAsset, sequence: String, batch: String, libraryRoot: URL, identity: ShotTags?
     ) async -> (destinationURL: URL?, failureReason: String?) {
         guard PhotoAssetLoader.isRaw(asset.url) else { return (nil, nil) }
 
@@ -295,8 +296,11 @@ struct IPadImportService {
                 batch: batch,
                 artFilterToken: developed.token)
 
+            // The RAW's own ids serve its derivative unchanged: same frame, and a RAW is its own
+            // parent, so `originalDocumentID` already names it.
             let result = try await processMoveService.processAndCopy(
-                asset: derived, renameContext: context, libraryRoot: libraryRoot)
+                asset: derived, renameContext: context, libraryRoot: libraryRoot,
+                identity: identity)
             return (result.destinationURL, nil)
         } catch {
             return (nil, FailureDiagnostics.describe(error))
