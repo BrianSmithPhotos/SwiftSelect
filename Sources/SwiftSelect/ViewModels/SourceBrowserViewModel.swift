@@ -2317,7 +2317,8 @@ final class SourceBrowserViewModel {
             let asset = assetByID[target.id] ?? target
             let soocToken = AutoMetadataRules.soocToken(for: asset)
             let finalKeywords = AutoMetadataRules.keywordsWithAutoTokens(
-                keywords, artFilterToken: asset.artFilterToken, cameraToken: asset.cameraModel,
+                keywords, developToken: AutoMetadataRules.developToken(for: asset),
+                artFilterToken: asset.artFilterToken, cameraToken: asset.cameraModel,
                 lensToken: asset.lensModel, soocToken: soocToken)
             let finalDescription = AutoMetadataRules.descriptionWithArtFilterNote(
                 description, artFilterToken: asset.artFilterToken)

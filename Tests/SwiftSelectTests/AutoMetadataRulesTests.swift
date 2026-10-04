@@ -70,6 +70,36 @@ final class AutoMetadataRulesTests: XCTestCase {
         XCTAssertEqual(keywords, ["sunset", "beach", "Grainy Film II", "OM-1", "12-40mm", "sooc"])
     }
 
+    func testASaveOfFreshKeywordsKeepsADevelopedJPEGsDecoderToken() {
+        var developed = PhotoAsset(id: URL(fileURLWithPath: "/tmp/staging-abc.jpg"))
+        developed.derivedFrom = URL(fileURLWithPath: "/tmp/H1052236.ORF")
+        developed.keywords = ["RAW9"]
+
+        // What an AI suggestion leaves in the editor: a new list with no token in it.
+        let keywords = AutoMetadataRules.keywordsWithAutoTokens(
+            ["alpine lake", "granite cliffs"],
+            developToken: AutoMetadataRules.developToken(for: developed), artFilterToken: nil,
+            cameraToken: "OM-3", lensToken: nil, soocToken: "")
+
+        XCTAssertEqual(keywords, ["alpine lake", "granite cliffs", "RAW9", "OM-3"])
+        XCTAssertEqual(RawDevelopService.token(in: keywords), "RAW9")
+    }
+
+    func testDevelopTokenIsNotAddedTwice() {
+        let keywords = AutoMetadataRules.keywordsWithAutoTokens(
+            ["RAW9", "heron"], developToken: "RAW9", artFilterToken: nil, cameraToken: nil,
+            lensToken: nil, soocToken: "")
+
+        XCTAssertEqual(keywords, ["RAW9", "heron"])
+    }
+
+    func testACameraFileHasNoDevelopTokenEvenWithALookalikeKeyword() {
+        var camera = PhotoAsset(id: URL(fileURLWithPath: "/tmp/H1052236.JPG"))
+        camera.keywords = ["RAW9"]
+
+        XCTAssertNil(AutoMetadataRules.developToken(for: camera))
+    }
+
     func testKeywordsWithAutoTokensSkipsBlankTokens() {
         let keywords = AutoMetadataRules.keywordsWithAutoTokens(
             ["sunset"], artFilterToken: nil, cameraToken: "", lensToken: "  ", soocToken: "")

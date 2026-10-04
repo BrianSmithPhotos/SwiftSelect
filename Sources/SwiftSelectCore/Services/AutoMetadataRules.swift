@@ -38,15 +38,30 @@ public enum AutoMetadataRules {
         return asset.cameraLookSummary
     }
 
-    /// Appends camera/lens/art-filter/SOOC tokens to `keywords`, case-insensitively de-duplicated
-    /// against what's already there and against each other. Blank tokens are skipped.
+    /// The decoder token (`RAW9`) a developed JPEG must keep through a save, or `nil` for any
+    /// other file.
+    ///
+    /// The token is the only record of which decoder rendered the file, and it lives in the
+    /// keywords, which a save replaces wholesale. An AI suggestion fills the editor with a fresh
+    /// list that has no token in it, so without this the save erased it and the processed file
+    /// lost `RAW9` from its name, landing on the camera JPEG's name with a `_1` suffix.
+    public static func developToken(for asset: PhotoAsset) -> String? {
+        guard asset.derivedFrom != nil else { return nil }
+        return RawDevelopService.token(in: asset.keywords)
+    }
+
+    /// Appends develop/camera/lens/art-filter/SOOC tokens to `keywords`, case-insensitively
+    /// de-duplicated against what's already there and against each other. Blank tokens are skipped.
     public static func keywordsWithAutoTokens(
-        _ keywords: [String], artFilterToken: String?, cameraToken: String?, lensToken: String?,
-        soocToken: String
+        _ keywords: [String], developToken: String? = nil, artFilterToken: String?,
+        cameraToken: String?, lensToken: String?, soocToken: String
     ) -> [String] {
         var seenLowercased = Set(keywords.map { $0.lowercased() })
         var result = keywords
-        for candidate in [artFilterToken ?? "", cameraToken ?? "", lensToken ?? "", soocToken] {
+        let candidates = [
+            developToken ?? "", artFilterToken ?? "", cameraToken ?? "", lensToken ?? "", soocToken,
+        ]
+        for candidate in candidates {
             let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, !seenLowercased.contains(trimmed.lowercased()) else { continue }
             seenLowercased.insert(trimmed.lowercased())
