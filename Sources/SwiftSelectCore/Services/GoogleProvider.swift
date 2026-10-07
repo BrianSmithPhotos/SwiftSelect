@@ -56,7 +56,8 @@ public struct GoogleProvider: AIProvider {
                 GoogleMessage(role: "system", content: .text(systemPrompt)),
                 GoogleMessage(role: "user", content: .parts(userContent)),
             ],
-            temperature: 0.2,
+            // No temperature: Gemini fixes its own sampling from 3.6 Flash on, and newer models
+            // reject the field outright (400 INVALID_ARGUMENT).
             // Gemini 3 models reject "none" (thinking can't be turned off), so "minimal" is the
             // lowest effort available for the fallback retry.
             reasoningEffort: think ? nil : "minimal")
@@ -161,11 +162,10 @@ private struct GoogleMessage: Encodable {
 private struct GoogleChatRequest: Encodable {
     var model: String
     var messages: [GoogleMessage]
-    var temperature: Double
     var reasoningEffort: String?
 
     enum CodingKeys: String, CodingKey {
-        case model, messages, temperature
+        case model, messages
         case reasoningEffort = "reasoning_effort"
     }
 }

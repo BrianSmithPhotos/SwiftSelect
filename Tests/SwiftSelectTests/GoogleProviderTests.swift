@@ -103,6 +103,24 @@ final class GoogleProviderTests: XCTestCase {
         XCTAssertEqual(json["reasoning_effort"] as? String, "minimal")
     }
 
+    /// Newer Gemini models answer 400 INVALID_ARGUMENT to any of these, so none may be sent.
+    func testChatSendsNoSamplingParameters() async throws {
+        var capturedBody: Data?
+        MockURLProtocol.requestHandler = { request in
+            capturedBody = request.httpBody
+            return self.jsonResponse(
+                for: request, body: #"{"choices": [{"message": {"content": "hello"}}]}"#)
+        }
+
+        _ = try await chat(provider: GoogleProvider(session: makeSession()))
+
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        for key in ["temperature", "top_p", "top_k"] {
+            XCTAssertNil(json[key], "\(key) must not be sent")
+        }
+    }
+
     func testChatThrowsEmptyResponseWhenContentIsBlank() async {
         MockURLProtocol.requestHandler = { request in
             self.jsonResponse(for: request, body: #"{"choices": [{"message": {"content": "  "}}]}"#)
