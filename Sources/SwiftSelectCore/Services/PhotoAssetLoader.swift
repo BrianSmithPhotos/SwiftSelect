@@ -27,7 +27,12 @@ public struct PhotoAssetLoader {
     /// identically to `.orf` (`com.olympus.or-raw-image`), so it browses and develops like any other
     /// RAW — and it has to be here, or the app would leave those originals behind on the card while
     /// moving the frame they belong to.
-    public static let rawExtensions: Set<String> = ["orf", "ori", "raf"]
+    ///
+    /// `.rw2` is Panasonic's RAW, added for the Lumix S9. ImageIO types it
+    /// `com.panasonic.rw2-raw-image` and `CIRAWFilter` develops it, checked on DPReview sample
+    /// files (macOS 27.2). Only browsing and develop come with the entry: grouping signals and
+    /// look readings are still Olympus tags.
+    public static let rawExtensions: Set<String> = ["orf", "ori", "raf", "rw2"]
 
     /// Video formats the app browses. The OM-3 writes `.mov`; `.mp4` is here because every other
     /// camera and phone writes that instead, and both are containers AVFoundation reads natively.

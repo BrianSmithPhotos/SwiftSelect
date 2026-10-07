@@ -26,7 +26,9 @@ deterministically, and copy files into local storage.
   Olympus/OM System `.orf`; pick based on whatever camera the Swift app's user actually shoots).
   Olympus bodies also write `.ori`: the same RAW format under a second extension, holding the
   un-composited original kept beside a hi-res or composite frame. It counts as a RAW, not a sidecar
-  — missing it would leave those originals on the card when their frame is moved.
+  — missing it would leave those originals on the card when their frame is moved. Fujifilm `.raf`
+  and Panasonic `.rw2` (Lumix S9) are browsed and developed too; capture-set signals and look
+  readings are still Olympus-only, so those frames group by the timestamp gap alone.
 - Videos (`.MOV`, `.MP4`) are browsed in the same grid, with the same Skip — see §9 for everything
   that differs about them.
 - Thumbnails and full preview load off the main thread; RAW files fall back to the embedded

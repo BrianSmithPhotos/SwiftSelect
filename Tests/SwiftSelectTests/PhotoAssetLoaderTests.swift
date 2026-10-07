@@ -54,13 +54,14 @@ final class PhotoAssetLoaderTests: XCTestCase {
     /// reachable by one but not the other would either be unbrowsable or undevelopable.
     func testRawExtensionsAreAllSupportedAndRecognisedAsRaw() {
         XCTAssertTrue(PhotoAssetLoader.rawExtensions.isSubset(of: PhotoAssetLoader.supportedExtensions))
-        XCTAssertEqual(PhotoAssetLoader.rawExtensions, ["orf", "ori", "raf"])
+        XCTAssertEqual(PhotoAssetLoader.rawExtensions, ["orf", "ori", "raf", "rw2"])
 
         XCTAssertTrue(PhotoAssetLoader.isRaw(URL(fileURLWithPath: "/x/P1010042.ORF")))
         // The original beside a hi-res composite, which shares its frame's stem and so has to be
         // loaded with it rather than left on the card.
         XCTAssertTrue(PhotoAssetLoader.isRaw(URL(fileURLWithPath: "/x/P1010042.ORI")))
         XCTAssertTrue(PhotoAssetLoader.isRaw(URL(fileURLWithPath: "/x/DSCF5072.RAF")))
+        XCTAssertTrue(PhotoAssetLoader.isRaw(URL(fileURLWithPath: "/x/P1000001.RW2")))
         XCTAssertFalse(PhotoAssetLoader.isRaw(URL(fileURLWithPath: "/x/P1010042.JPG")))
     }
 
