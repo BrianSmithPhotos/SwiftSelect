@@ -86,6 +86,46 @@ final class PanasonicLookParsingTests: XCTestCase {
         XCTAssertEqual(summary(standard), "Vivid | grain standard")
     }
 
+    /// P1000069: warm Auto with A5 G3 dialled in. P1000060: the amber frame of a bracket on Auto.
+    func testWhiteBalanceModeAndShiftReadAsTheCameraShowsThem() {
+        let warm: [String: Any] = [
+            "Panasonic:PhotoStyle": "Standard or Custom", "Panasonic:WhiteBalance": "Unknown (20)",
+            "Panasonic:WBShiftAB": -5, "Panasonic:WBShiftGM": 3,
+        ]
+        let bracket: [String: Any] = [
+            "Panasonic:PhotoStyle": "Vivid", "Panasonic:WhiteBalance": "Auto",
+            "Panasonic:WBShiftAB": 4, "Panasonic:WBShiftGM": 0,
+        ]
+
+        XCTAssertEqual(summary(warm), "Standard | white balance AWBw A5 G3")
+        XCTAssertEqual(summary(bracket), "Vivid | white balance B4")
+    }
+
+    /// P1000071-79: one frame per white balance mode.
+    func testEachWhiteBalanceModeIsNamedAsTheCameraNamesIt() {
+        let expected: [(mode: String, kelvin: Int, shift: (Int, Int), row: String)] = [
+            ("Auto (cool)", 4100, (0, 0), "AWBc"), ("Daylight", 5500, (0, 0), "Daylight"),
+            ("Shade", 7300, (0, 0), "Shade"), ("Manual", 5500, (0, 0), "White set 1"),
+            ("Kelvin", 5500, (0, 0), "5500K"), ("Unknown (17)", 4900, (4, -3), "4900K B4 M3"),
+        ]
+        for (mode, kelvin, shift, row) in expected {
+            let metadata: [String: Any] = [
+                "Panasonic:PhotoStyle": "Standard or Custom", "Panasonic:WhiteBalance": mode,
+                "Panasonic:ColorTempKelvin": kelvin, "Panasonic:WBShiftAB": shift.0,
+                "Panasonic:WBShiftGM": shift.1,
+            ]
+
+            XCTAssertEqual(summary(metadata), "Standard | white balance \(row)", mode)
+        }
+    }
+
+    func testPlainAutoWhiteBalanceAddsNothing() {
+        XCTAssertNil(CameraLookParsing.parse(from: [
+            "Panasonic:PhotoStyle": "Standard or Custom", "Panasonic:WhiteBalance": "Auto",
+            "Panasonic:ColorTempKelvin": 4400, "Panasonic:WBShiftAB": 0, "Panasonic:WBShiftGM": 0,
+        ]))
+    }
+
     func testAnOlympusFileIsUntouched() {
         XCTAssertEqual(summary(["Olympus:PictureMode": "Vivid"]), "Vivid")
     }

@@ -60,6 +60,9 @@ public enum PanasonicLookParsing {
             look.mode = base
         }
         look.readings += settings(metadata)
+        if let whiteBalance = whiteBalance(metadata) {
+            look.readings.append(.init(name: "White balance", value: whiteBalance))
+        }
 
         if look.isModeOnly, look.mode == "Standard" { return nil }
         return look
@@ -138,6 +141,38 @@ public enum PanasonicLookParsing {
         "Unknown (4)": "low, colour noise", "Unknown (5)": "standard, colour noise",
         "Unknown (6)": "high, colour noise",
     ]
+
+    /// The white balance as the camera shows it, `AWBw A5 G3`, or `nil` for plain Auto with no
+    /// shift. One frame per mode was shot on an S9 to fix the names below; a mode exiftool cannot
+    /// name and that card did not hold (the third and fourth colour temperature sets) is left out
+    /// rather than shown as a number.
+    ///
+    /// The shift signs were read off an S9: a frame dialled to A5 G3 wrote amber-blue -5 and
+    /// green-magenta +3, so negative is amber on the first axis and positive is green on the second.
+    private static func whiteBalance(_ metadata: [String: Any]) -> String? {
+        let raw = text(metadata, "Panasonic:WhiteBalance")
+        var mode = whiteBalanceNames[raw] ?? (raw.hasPrefix("Unknown") ? "" : raw)
+        // A colour temperature set is the number dialled in. `ColorTempKelvin` is written on
+        // every frame, so it only names the mode here.
+        if kelvinModes.contains(raw) { mode = text(metadata, "Panasonic:ColorTempKelvin") + "K" }
+        let amberBlue = Int(number(text(metadata, "Panasonic:WBShiftAB")) ?? 0)
+        let greenMagenta = Int(number(text(metadata, "Panasonic:WBShiftGM")) ?? 0)
+        var parts = mode.isEmpty ? [] : [mode]
+        if amberBlue != 0 { parts.append("\(amberBlue < 0 ? "A" : "B")\(abs(amberBlue))") }
+        if greenMagenta != 0 { parts.append("\(greenMagenta > 0 ? "G" : "M")\(abs(greenMagenta))") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// exiftool's white balance text mapped to the camera's own. "Manual" is the first registered
+    /// white set (shot); 2 to 4 follow exiftool's own numbering and were not shot.
+    private static let whiteBalanceNames: [String: String] = [
+        "Auto": "", "Auto (cool)": "AWBc", "Unknown (20)": "AWBw",
+        "Manual": "White set 1", "Manual 2": "White set 2", "Manual 3": "White set 3",
+        "Manual 4": "White set 4",
+    ]
+
+    /// The first colour temperature set and the second, which exiftool 13.55 cannot name (17).
+    private static let kelvinModes: Set<String> = ["Kelvin", "Unknown (17)"]
 
     private static func number(_ text: String) -> Double? { Double(text) }
 

@@ -33,7 +33,7 @@ deterministically, and copy files into local storage.
   Real Time LUT's file name (`DualLUT` for two stacked, which the look then lists), else a saved custom style's name, else the photo style unless it is
   Standard, and the strip and `Instructions` add the base style under a LUT or custom style plus
   every dialled setting (contrast, highlights, shadows, saturation, hue, sharpness, noise
-  reduction, grain). The `.rw2` gets none of it: the camera applies the look to the JPEG only.
+  reduction, grain, and the white balance mode and shift when it is not plain Auto). The `.rw2` gets none of it: the camera applies the look to the JPEG only.
   The iPad does not read the look yet, and Fujifilm frames group by the timestamp gap alone.
 - Videos (`.MOV`, `.MP4`) are browsed in the same grid, with the same Skip — see §9 for everything
   that differs about them.
