@@ -40,7 +40,9 @@ enum ExifToolError: Error, LocalizedError {
 struct ExifToolClient: MetadataWriter {
     /// `-j -G1 -a -s` matches the reference app's read command: JSON output, grouped tag names,
     /// duplicate tags allowed, short tag names. See docs/SPEC.md §2.
-    private static let readArguments = ["-j", "-G1", "-a", "-s"]
+    /// `-u` adds the tags exiftool has no name for: a Lumix custom photo style's name is one
+    /// (`Panasonic_0x00d5`). It makes the output about a third larger on an S9 JPEG.
+    private static let readArguments = ["-j", "-G1", "-a", "-s", "-u"]
 
     /// Only for the write-back's last batch, over the files an ordinary write refused - see
     /// `leniency` and `exifIsUnwritable`. Every other caller keeps exiftool's refusals.

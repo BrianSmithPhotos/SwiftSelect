@@ -124,6 +124,7 @@ struct CameraLookStripView: View {
         }
         if !sliders.isEmpty { group("Sliders", sliders) }
         if !finish.isEmpty { group("Finish", finish) }
+        if !look.readings.isEmpty { group("Settings", look.readings.map { ($0.name, $0.value) }) }
     }
 
     private func group<Content: View>(

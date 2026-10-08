@@ -40,7 +40,7 @@ public enum ArtFilterTokenParsing {
             return "MultipleExposure"
         }
 
-        return ""
+        return PanasonicLookParsing.token(from: metadata)
     }
 
     /// The creative-dial looks worth naming in a filename, from `PictureMode`'s PrintConv text.

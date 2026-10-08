@@ -96,6 +96,19 @@ public struct CameraLook: Hashable {
         }
     }
 
+    /// A reading that is only a name and an already-rendered value. The Lumix settings arrive this
+    /// way: the camera steps some in halves, and none has a graphic to feed, so nothing would be
+    /// gained by typing them one field each.
+    public struct Reading: Hashable {
+        public let name: String
+        public let value: String
+
+        public init(name: String, value: String) {
+            self.name = name
+            self.value = value
+        }
+    }
+
     public var partialColor: PartialColor?
     public var artEffects: [ArtEffect] = []
     public var colorCreator: ColorCreator?
@@ -131,6 +144,8 @@ public struct CameraLook: Hashable {
     /// Keep Warm Color is on by default, so only the off reading is ever held — and only when the
     /// frame is Auto WB, where the setting is legible at all. See `CameraLookParsing.whiteBalance`.
     public var keepWarmColorOff: Bool = false
+
+    public var readings: [Reading] = []
 
     public init() {}
 
@@ -180,6 +195,8 @@ public struct CameraLook: Hashable {
 
         if let whiteBalanceShift { segments.append(Self.rendered(whiteBalanceShift)) }
         if keepWarmColorOff { segments.append("wb warm off") }
+
+        for reading in readings { segments.append("\(reading.name.lowercased()) \(reading.value)") }
 
         return segments
     }

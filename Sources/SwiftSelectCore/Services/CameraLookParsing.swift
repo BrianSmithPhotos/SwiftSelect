@@ -52,6 +52,7 @@ public enum CameraLookParsing {
     /// maker-note scan of a Custom/i-Enhance frame shows no slot index or flag anywhere — the same
     /// "records what you dialled, not which slot you dialled it in" behaviour as the profiles.
     public static func parse(from metadata: [String: Any]) -> CameraLook? {
+        if metadata["Panasonic:PhotoStyle"] != nil { return PanasonicLookParsing.parse(from: metadata) }
         let chosenLook = ArtFilterTokenParsing.token(from: metadata)
         let pictureMode = fields(metadata, "Olympus:PictureMode").first ?? ""
         let mode = chosenLook.isEmpty ? pictureMode : chosenLook
