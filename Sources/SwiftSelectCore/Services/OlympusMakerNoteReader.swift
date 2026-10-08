@@ -208,8 +208,10 @@ public enum OlympusMakerNoteReader {
 
     /// The Lumix signals, built to match what `ExifToolClient.groupingSignals` makes of the same
     /// frame. The Panasonic note is a 12-byte header and then one flat directory whose offsets
-    /// count from the TIFF header, so there is no subdirectory to walk to. The only tag wanted is
-    /// `SequenceNumber` (0x2B): 0 on a single shot, counting from 1 inside a burst or bracket.
+    /// count from the TIFF header, so there is no subdirectory to walk to. Two things are wanted:
+    /// `SequenceNumber` (0x2B), 0 on a single shot and counting from 1 inside a burst or bracket,
+    /// and the white balance shift, which is all that separates the frames of a white balance
+    /// bracket.
     private static func panasonicSignals(
         in file: TIFFBytes, note: Int, tiff: Int, exposure: Double?, wholeBias: Bool,
         requiringCompleteRead: Bool
@@ -218,9 +220,18 @@ public enum OlympusMakerNoteReader {
         // No entries means the directory ran off the end of a prefix, not a bare note.
         if requiringCompleteRead { guard !entries.isEmpty, wholeBias else { return nil } }
 
+        // The white balance shifts (0x46 amber-blue, 0x47 green-magenta) are stored as unsigned
+        // shorts holding signed values: -4 arrives as 65532.
+        func signed(_ tag: Int) -> Int? {
+            entries.first { $0.tag == tag }.flatMap { file.numbers(of: $0).first }
+                .map { $0 > 0x7FFF ? $0 - 0x10000 : $0 }
+        }
         var signals = CaptureSignals.grouping(
             driveMode: [], intervalCounter: [], stackedImage: [],
-            render: ["", "", exposure.map { String(format: "%g", $0) } ?? ""])
+            render: [
+                "", "", exposure.map { String(format: "%g", $0) } ?? "",
+                CaptureSignals.whiteBalanceShift(signed(0x46), signed(0x47)),
+            ])
         if let sequence = entries.first(where: { $0.tag == 0x2B }).flatMap({ file.numbers(of: $0).first }),
             sequence > 0
         {

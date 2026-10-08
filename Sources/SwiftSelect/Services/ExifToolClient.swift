@@ -122,12 +122,13 @@ struct ExifToolClient: MetadataWriter {
     /// for `ShotIdentity`: it sits in the Olympus maker note, which ImageIO does not expose.
     ///
     /// `SequenceNumber` is the Panasonic counterpart of `DriveMode`'s shot index, read for the
-    /// Lumix S9.
+    /// Lumix S9. `WBShiftAB` and `WBShiftGM` are the only thing separating the three frames of its
+    /// white balance bracket.
     private static let groupingArguments = [
         "-j", "-s", "-n", "-u",
         "-DriveMode", "-Olympus_CameraSettings_0x0605", "-StackedImage",
         "-ArtFilterEffect", "-PictureMode", "-ExposureCompensation", "-Caption-Abstract",
-        "-SerialNumber", "-SequenceNumber",
+        "-SerialNumber", "-SequenceNumber", "-WBShiftAB", "-WBShiftGM",
     ]
 
     /// Five tags is a fraction of a full read's output, so this runs in much larger chunks than
@@ -170,14 +171,23 @@ struct ExifToolClient: MetadataWriter {
     }
 
     static func groupingSignals(from entry: [String: Any]) -> CaptureSignals {
+        var render = [
+            CaptureSignals.artFilterEffect(numbers(entry["ArtFilterEffect"])),
+            text(entry["PictureMode"]), text(entry["ExposureCompensation"]),
+        ]
+        // A Lumix white balance bracket writes three frames from one exposure: same instant, no
+        // sequence number, and only the white balance shift differing (checked on an S9 card:
+        // A-B shift 0, -4, +4). In the render it makes them a rendering bracket, not three presses.
+        if entry["SequenceNumber"] != nil {
+            render.append(
+                CaptureSignals.whiteBalanceShift(
+                    numbers(entry["WBShiftAB"]).first, numbers(entry["WBShiftGM"]).first))
+        }
         var signals = CaptureSignals.grouping(
             driveMode: numbers(entry["DriveMode"]),
             intervalCounter: numbers(entry["Olympus_CameraSettings_0x0605"]),
             stackedImage: numbers(entry["StackedImage"]),
-            render: [
-                CaptureSignals.artFilterEffect(numbers(entry["ArtFilterEffect"])),
-                text(entry["PictureMode"]), text(entry["ExposureCompensation"]),
-            ])
+            render: render)
         // Panasonic writes no `DriveMode`. Its `SequenceNumber` is 0 on a single shot and counts
         // from 1 inside a burst or bracket, restarting each time (checked on a Lumix S9 card: a
         // 3-frame exposure bracket and an 11-frame focus bracket), so it means the same thing.

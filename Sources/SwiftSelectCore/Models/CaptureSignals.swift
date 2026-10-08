@@ -97,6 +97,12 @@ public struct CaptureSignals: Equatable, Sendable {
         values.prefix(4).map(String.init).joined(separator: " ")
     }
 
+    /// A Lumix frame's white balance shift (amber-blue, then green-magenta) as render text, the
+    /// same on both platforms. A missing value reads as no shift.
+    public static func whiteBalanceShift(_ amberBlue: Int?, _ greenMagenta: Int?) -> String {
+        "\(amberBlue ?? 0) \(greenMagenta ?? 0)"
+    }
+
     /// Fills in whatever this value doesn't know from `other`, used to give a frame one set of
     /// signals when its JPEG and RAW were read separately.
     mutating func fillGaps(from other: CaptureSignals) {

@@ -50,4 +50,24 @@ final class PanasonicGroupingSignalsTests: XCTestCase {
 
         XCTAssertEqual(sets.map(\.members.count), [11, 1])
     }
+
+    /// P1000059-61 then a later single: one instant, no sequence number, shift 0, -4, +4.
+    func testAWhiteBalanceBracketIsOneCaptureSet() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var assets: [PhotoAsset] = []
+        var signals: [URL: CaptureSignals] = [:]
+        for (index, shift) in [0, -4, 4, 0].enumerated() {
+            let url = URL(fileURLWithPath: "/card/P10000\(59 + index).JPG")
+            var asset = PhotoAsset(id: url)
+            asset.capturedAt = index < 3 ? start : start.addingTimeInterval(60)
+            assets.append(asset)
+            signals[url] = ExifToolClient.groupingSignals(from: [
+                "SequenceNumber": 0, "ExposureCompensation": 0, "WBShiftAB": shift, "WBShiftGM": 0,
+            ])
+        }
+
+        let sets = CaptureGroupingService().group(assets, signals: signals)
+
+        XCTAssertEqual(sets.map(\.members.count), [3, 1])
+    }
 }

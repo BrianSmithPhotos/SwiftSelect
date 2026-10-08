@@ -253,16 +253,28 @@ final class OlympusMakerNoteReaderTests: XCTestCase {
     // MARK: - Panasonic
 
     /// A Lumix note: a 12-byte header, then one flat directory holding `SequenceNumber`.
-    private func panasonicNote(sequence: Int) -> [UInt8] {
+    private func panasonicNote(sequence: Int, shiftAB: Int = 0) -> [UInt8] {
         Array("Panasonic\0\0\0".utf8)
-            + ifd([Entry(tag: 0x2B, format: 4, count: 1, payload: le32(sequence))], at: 0)
+            + ifd(
+                [
+                    Entry(tag: 0x2B, format: 4, count: 1, payload: le32(sequence)),
+                    Entry(tag: 0x46, format: 3, count: 1, payload: le16(shiftAB)),
+                    Entry(tag: 0x47, format: 3, count: 1, payload: le16(0)),
+                ], at: 0)
+    }
+
+    /// P1000059-61: the three frames of a white balance bracket differ only in the shift.
+    func testALumixWhiteBalanceShiftIsPartOfTheRender() {
+        let amber = OlympusMakerNoteReader.signals(in: jpeg(tiffBlock(note: panasonicNote(sequence: 0, shiftAB: -4))))
+
+        XCTAssertEqual(amber?.renderSignature, "||-0.7|-4 0")
     }
 
     func testReadsALumixSequenceNumberAsTheShotNumber() {
         let signals = OlympusMakerNoteReader.signals(in: jpeg(tiffBlock(note: panasonicNote(sequence: 4))))
 
         XCTAssertEqual(signals?.shotNumber, 4)
-        XCTAssertEqual(signals?.renderSignature, "||-0.7")
+        XCTAssertEqual(signals?.renderSignature, "||-0.7|0 0")
     }
 
     func testALumixSingleShotHasNoShotNumber() {
