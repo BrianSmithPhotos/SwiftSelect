@@ -10,14 +10,16 @@ import Foundation
 ///
 /// The RW2 of a pair carries the same tags as its JPEG but none of the look is applied to it.
 public enum PanasonicLookParsing {
-    /// The look worth naming in a filename, in this order: the Real Time LUT's file name (or
-    /// `DualLUT` for two stacked), a saved
-    /// custom style's name, then the photo style unless it is Standard. A RAW gets none.
+    /// The look worth naming in a filename, in this order: a filter, a custom style's own title,
+    /// the Real Time LUT's file name (or `DualLUT` for two stacked), a custom style still on its
+    /// factory name, then the photo style unless it is Standard. A RAW gets none.
     ///
     /// Underscores become dashes because the token is one `_`-separated filename segment: a LUT
     /// file named `Scafell_sRGB33` would otherwise read as two.
     public static func token(from metadata: [String: Any]) -> String {
         guard text(metadata, "File:FileType") != "RW2" else { return "" }
+        if let filter = filter(metadata) { return filter }
+        if let title = title(metadata) { return title }
         let luts = luts(metadata)
         if luts.count > 1 { return dualLut }
         if let lut = luts.first { return lut.name }
@@ -38,15 +40,21 @@ public enum PanasonicLookParsing {
 
         var look = CameraLook()
         let luts = luts(metadata)
-        if let lut = luts.first {
-            look.mode = luts.count > 1 ? dualLut : lut.name
-            // The base is the photo style even under a saved custom style: the custom style names
-            // the set of dialled settings, not what the LUT sits on.
+        if let filter = filter(metadata) {
+            look.mode = filter
+        } else if let lut = luts.first {
+            // A titled style is the look: it is the LUT plus whatever else was dialled in. The
+            // base is still the photo style, which is what the LUT sits on.
+            let title = title(metadata)
+            look.mode = title ?? (luts.count > 1 ? dualLut : lut.name)
             look.readings.append(.init(name: "Base", value: base))
-            if let customStyle = customStyle(metadata) {
+            if title == nil, let customStyle = customStyle(metadata) {
                 look.readings.append(.init(name: "Style", value: customStyle))
             }
-            if luts.count > 1 {
+            if title != nil, luts.count == 1 {
+                let opacity = lut.opacity == 100 ? "" : " \(lut.opacity)%"
+                look.readings.append(.init(name: "LUT", value: lut.name + opacity))
+            } else if luts.count > 1 {
                 for (index, lut) in luts.enumerated() {
                     look.readings.append(.init(name: "LUT \(index + 1)", value: "\(lut.name) \(lut.opacity)%"))
                 }
@@ -85,6 +93,14 @@ public enum PanasonicLookParsing {
         return photoStyle.hasPrefix("Unknown") ? "" : photoStyle.replacingOccurrences(of: "L. ", with: "L.")
     }
 
+    /// The filter (Expressive, Retro, Old Days, High Key, Low Key, Sepia, Cross Process, Bleach
+    /// Bypass: one frame of each shot on an S9, all named correctly by exiftool 13.55), or `nil`
+    /// for none. The camera clears the LUT and reads Standard while a filter is on.
+    private static func filter(_ metadata: [String: Any]) -> String? {
+        let name = text(metadata, "Panasonic:FilterEffect")
+        return name.isEmpty || name == "Off" || name.hasPrefix("Unknown") ? nil : name
+    }
+
     /// Two stacked LUTs look like neither one, and both names would make a long filename, so the
     /// pair gets this name and the look lists the two.
     private static let dualLut = "DualLUT"
@@ -106,6 +122,12 @@ public enum PanasonicLookParsing {
         let name = text(metadata, "Panasonic:Panasonic_0x00d5")
             .replacingOccurrences(of: "[...]", with: "").trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? nil : name
+    }
+
+    /// A custom style's name once it has been given one. The factory names (`MY PHOTO STYLE 1`)
+    /// say less than the LUT does, so they do not count.
+    private static func title(_ metadata: [String: Any]) -> String? {
+        customStyle(metadata).flatMap { $0.hasPrefix("MY PHOTO STYLE") ? nil : $0 }
     }
 
     /// The dialled settings that are not at 0, in the camera's menu order. The camera steps some

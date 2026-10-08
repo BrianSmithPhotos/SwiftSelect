@@ -123,12 +123,13 @@ struct ExifToolClient: MetadataWriter {
     ///
     /// `SequenceNumber` is the Panasonic counterpart of `DriveMode`'s shot index, read for the
     /// Lumix S9. `WBShiftAB` and `WBShiftGM` are the only thing separating the three frames of its
-    /// white balance bracket.
+    /// white balance bracket, and `FilterEffect` the only thing separating a filtered JPEG from the
+    /// plain one the camera can save beside it.
     private static let groupingArguments = [
         "-j", "-s", "-n", "-u",
         "-DriveMode", "-Olympus_CameraSettings_0x0605", "-StackedImage",
         "-ArtFilterEffect", "-PictureMode", "-ExposureCompensation", "-Caption-Abstract",
-        "-SerialNumber", "-SequenceNumber", "-WBShiftAB", "-WBShiftGM",
+        "-SerialNumber", "-SequenceNumber", "-WBShiftAB", "-WBShiftGM", "-FilterEffect",
     ]
 
     /// Five tags is a fraction of a full read's output, so this runs in much larger chunks than
@@ -182,6 +183,9 @@ struct ExifToolClient: MetadataWriter {
             render.append(
                 CaptureSignals.whiteBalanceShift(
                     numbers(entry["WBShiftAB"]).first, numbers(entry["WBShiftGM"]).first))
+            // "Simultaneous record without filter" does the same with a filter: two JPEGs from one
+            // exposure, one filtered (`0 1` for Expressive) and one plain (`0 0`).
+            render.append(text(entry["FilterEffect"]))
         }
         var signals = CaptureSignals.grouping(
             driveMode: numbers(entry["DriveMode"]),

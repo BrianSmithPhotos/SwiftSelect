@@ -226,11 +226,19 @@ public enum OlympusMakerNoteReader {
             entries.first { $0.tag == tag }.flatMap { file.numbers(of: $0).first }
                 .map { $0 > 0x7FFF ? $0 - 0x10000 : $0 }
         }
+        // `FilterEffect` (0xA1) is declared a rational but holds two plain 32-bit numbers, which is
+        // how exiftool reads it too: `0 1` is Expressive, `0 0` no filter.
+        // Its value sits outside the directory, so a prefix can hold the entry and not the value.
+        let filterParts = entries.first { $0.tag == 0xA1 }.map { entry in
+            [0, 4].compactMap { file.uint32(at: entry.valueOffset + $0) }
+        }
+        if requiringCompleteRead, let filterParts, filterParts.count < 2 { return nil }
+        let filter = filterParts.map { $0.map(String.init).joined(separator: " ") }
         var signals = CaptureSignals.grouping(
             driveMode: [], intervalCounter: [], stackedImage: [],
             render: [
                 "", "", exposure.map { String(format: "%g", $0) } ?? "",
-                CaptureSignals.whiteBalanceShift(signed(0x46), signed(0x47)),
+                CaptureSignals.whiteBalanceShift(signed(0x46), signed(0x47)), filter ?? "",
             ])
         if let sequence = entries.first(where: { $0.tag == 0x2B }).flatMap({ file.numbers(of: $0).first }),
             sequence > 0

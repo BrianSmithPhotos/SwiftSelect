@@ -99,8 +99,8 @@ public struct RenameService {
         return (date, time)
     }
 
-    /// Trims outer whitespace, replaces filesystem-invalid characters and whitespace runs with a
-    /// single `-`, collapses repeated `-`, strips leading/trailing `-`/`.`, and caps length —
+    /// Trims outer whitespace, spells `&` as `and`, replaces filesystem-invalid characters and
+    /// whitespace runs with a single `-`, collapses repeated `-`, strips leading/trailing `-`/`.`, and caps length —
     /// applied identically to the batch, camera, lens, and art-filter segments.
     ///
     /// Public because `VideoMoveService` turns the same batch label into a *folder* name rather
@@ -110,7 +110,10 @@ public struct RenameService {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 
-        let replaced = String(trimmed.map { invalidFilenameCharacters.contains($0) ? "-" : $0 })
+        // `&` is a legal filename character but trips shells, URLs and XML further along, so a
+        // camera style titled `Bright & Sunny` is spelled out here.
+        let spelled = trimmed.replacingOccurrences(of: "&", with: " and ")
+        let replaced = String(spelled.map { invalidFilenameCharacters.contains($0) ? "-" : $0 })
         let whitespaceCollapsed = replaced.replacingOccurrences(
             of: "\\s+", with: "-", options: .regularExpression)
         let dashCollapsed = whitespaceCollapsed.replacingOccurrences(

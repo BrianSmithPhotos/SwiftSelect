@@ -70,4 +70,24 @@ final class PanasonicGroupingSignalsTests: XCTestCase {
 
         XCTAssertEqual(sets.map(\.members.count), [3, 1])
     }
+
+    /// P1010018/19 then a later single: "simultaneous record without filter" saves an Expressive
+    /// JPEG and a plain one from one exposure, same instant, no sequence number.
+    func testAFilteredJpegAndItsPlainCopyAreOneCaptureSet() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var assets: [PhotoAsset] = []
+        var signals: [URL: CaptureSignals] = [:]
+        for (index, filter) in ["0 1", "0 0", "0 1"].enumerated() {
+            let url = URL(fileURLWithPath: "/card/P10100\(18 + index).JPG")
+            assets.append(asset(url, capturedAt: index < 2 ? start : start.addingTimeInterval(48)))
+            signals[url] = ExifToolClient.groupingSignals(from: [
+                "SequenceNumber": 0, "ExposureCompensation": 0, "WBShiftAB": 0, "WBShiftGM": 0,
+                "FilterEffect": filter,
+            ])
+        }
+
+        let sets = CaptureGroupingService().group(assets, signals: signals)
+
+        XCTAssertEqual(sets.map(\.members.count), [2, 1])
+    }
 }

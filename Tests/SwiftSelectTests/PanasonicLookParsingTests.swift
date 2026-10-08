@@ -129,4 +129,53 @@ final class PanasonicLookParsingTests: XCTestCase {
     func testAnOlympusFileIsUntouched() {
         XCTAssertEqual(summary(["Olympus:PictureMode": "Vivid"]), "Vivid")
     }
+
+    /// P1010011: a filter clears the LUT and reads Standard; the filter is the look.
+    func testAFilterIsTheLookAndTheToken() {
+        let metadata: [String: Any] = [
+            "Panasonic:PhotoStyle": "Standard or Custom", "Panasonic:FilterEffect": "Retro",
+            "Panasonic:LUT1Name": "", "Panasonic:Panasonic_0x00d5": "[...]",
+        ]
+
+        XCTAssertEqual(summary(metadata), "Retro")
+        XCTAssertEqual(ArtFilterTokenParsing.token(from: metadata), "Retro")
+    }
+
+    /// P1010019: the plain copy saved beside a filtered JPEG.
+    func testNoFilterAddsNothing() {
+        let metadata: [String: Any] = [
+            "Panasonic:PhotoStyle": "Standard or Custom", "Panasonic:FilterEffect": "Off",
+        ]
+
+        XCTAssertNil(CameraLookParsing.parse(from: metadata))
+        XCTAssertEqual(ArtFilterTokenParsing.token(from: metadata), "")
+    }
+
+    /// P1010008: a style titled on the camera, holding a LUT and a contrast tweak.
+    func testATitledStyleWinsOverItsLut() {
+        let metadata: [String: Any] = [
+            "Panasonic:PhotoStyle": "Standard or Custom",
+            "Panasonic:LUT1Name": "HardKnott_sRGB33", "Panasonic:LUT1Opacity": 100,
+            "Panasonic:Panasonic_0x00d5": "Hard Knott[...]", "Panasonic:Panasonic_0x00d7": 2,
+        ]
+
+        XCTAssertEqual(summary(metadata), "Hard Knott | base Standard | lut HardKnott-sRGB33 | contrast +2")
+        XCTAssertEqual(ArtFilterTokenParsing.token(from: metadata), "Hard Knott")
+    }
+
+    func testATitledStyleListsItsLutOpacityAndBothOfTwoLuts() {
+        var metadata: [String: Any] = [
+            "Panasonic:PhotoStyle": "Standard or Custom",
+            "Panasonic:LUT1Name": "Catbells_sRGB33", "Panasonic:LUT1Opacity": 60,
+            "Panasonic:Panasonic_0x00d5": "Fells[...]",
+        ]
+        XCTAssertEqual(summary(metadata), "Fells | base Standard | lut Catbells-sRGB33 60%")
+
+        metadata["Panasonic:LUT2Name"] = "HardKnott_sRGB33"
+        metadata["Panasonic:LUT2Opacity"] = 70
+        XCTAssertEqual(
+            summary(metadata),
+            "Fells | base Standard | lut 1 Catbells-sRGB33 60% | lut 2 HardKnott-sRGB33 70%")
+        XCTAssertEqual(ArtFilterTokenParsing.token(from: metadata), "Fells")
+    }
 }

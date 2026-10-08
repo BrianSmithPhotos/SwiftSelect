@@ -97,6 +97,11 @@ final class RenameServiceTests: XCTestCase {
         XCTAssertEqual(filename, "1010042_Big-Sur-Highway-1_20260621_1405_OM-1_12-40mm-F2.8.jpg")
     }
 
+    func testSanitizeSpellsOutAnAmpersand() {
+        XCTAssertEqual(RenameService.sanitizeComponent("Bright & Sunny"), "Bright-and-Sunny")
+        XCTAssertEqual(RenameService.sanitizeComponent("Salt&Pepper"), "Salt-and-Pepper")
+    }
+
     func testSanitizeTruncatesComponentsLongerThan64Characters() {
         let longBatch = String(repeating: "a", count: 100)
         let context = RenameContext(
