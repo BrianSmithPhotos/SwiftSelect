@@ -10,14 +10,17 @@ import Foundation
 ///
 /// The RW2 of a pair carries the same tags as its JPEG but none of the look is applied to it.
 public enum PanasonicLookParsing {
-    /// The look worth naming in a filename, in this order: the Real Time LUT's file name, a saved
+    /// The look worth naming in a filename, in this order: the Real Time LUT's file name (or
+    /// `DualLUT` for two stacked), a saved
     /// custom style's name, then the photo style unless it is Standard. A RAW gets none.
     ///
     /// Underscores become dashes because the token is one `_`-separated filename segment: a LUT
     /// file named `Scafell_sRGB33` would otherwise read as two.
     public static func token(from metadata: [String: Any]) -> String {
         guard text(metadata, "File:FileType") != "RW2" else { return "" }
-        if let lut = lut(metadata) { return lut.name }
+        let luts = luts(metadata)
+        if luts.count > 1 { return dualLut }
+        if let lut = luts.first { return lut.name }
         if let customStyle = customStyle(metadata) { return customStyle }
         let style = styleName(text(metadata, "Panasonic:PhotoStyle"))
         return style == "Standard" ? "" : style
@@ -34,10 +37,22 @@ public enum PanasonicLookParsing {
         let base = styleName(photoStyle)
 
         var look = CameraLook()
-        if let lut = lut(metadata) {
-            look.mode = lut.name
+        let luts = luts(metadata)
+        if let lut = luts.first {
+            look.mode = luts.count > 1 ? dualLut : lut.name
+            // The base is the photo style even under a saved custom style: the custom style names
+            // the set of dialled settings, not what the LUT sits on.
             look.readings.append(.init(name: "Base", value: base))
-            if lut.opacity != 100 { look.readings.append(.init(name: "Opacity", value: "\(lut.opacity)%")) }
+            if let customStyle = customStyle(metadata) {
+                look.readings.append(.init(name: "Style", value: customStyle))
+            }
+            if luts.count > 1 {
+                for (index, lut) in luts.enumerated() {
+                    look.readings.append(.init(name: "LUT \(index + 1)", value: "\(lut.name) \(lut.opacity)%"))
+                }
+            } else if lut.opacity != 100 {
+                look.readings.append(.init(name: "Opacity", value: "\(lut.opacity)%"))
+            }
         } else if let customStyle = customStyle(metadata) {
             look.mode = customStyle
             look.readings.append(.init(name: "Base", value: base))
@@ -67,15 +82,18 @@ public enum PanasonicLookParsing {
         return photoStyle.hasPrefix("Unknown") ? "" : photoStyle.replacingOccurrences(of: "L. ", with: "L.")
     }
 
-    /// The first filled LUT slot, with the opacity that belongs to it.
-    private static func lut(_ metadata: [String: Any]) -> (name: String, opacity: Int)? {
-        for slot in ["LUT1", "LUT2"] {
+    /// Two stacked LUTs look like neither one, and both names would make a long filename, so the
+    /// pair gets this name and the look lists the two.
+    private static let dualLut = "DualLUT"
+
+    /// The filled LUT slots in order, each with its own opacity. The camera can stack two.
+    private static func luts(_ metadata: [String: Any]) -> [(name: String, opacity: Int)] {
+        ["LUT1", "LUT2"].compactMap { slot in
             let name = text(metadata, "Panasonic:\(slot)Name")
-            guard !name.isEmpty else { continue }
+            guard !name.isEmpty else { return nil }
             let opacity = number(text(metadata, "Panasonic:\(slot)Opacity")) ?? 100
             return (name.replacingOccurrences(of: "_", with: "-"), Int(opacity))
         }
-        return nil
     }
 
     /// A saved custom style reads as its base style's number; its name is in unnamed tag `0x00d5`.
@@ -115,7 +133,7 @@ public enum PanasonicLookParsing {
 
     /// Colour Noise On adds 3 to the grain number, which takes it past exiftool's table (1 Low,
     /// 2 Standard, 3 High). Shot on the S9: Low with it on wrote 4 and Standard with it on wrote 5,
-    /// while Standard with it off wrote 2. High with it on (6) follows the pattern but was not shot.
+    /// High with it on wrote 6, while Standard and High with it off wrote 2 and 3.
     private static let grainWithColourNoise: [String: String] = [
         "Unknown (4)": "low, colour noise", "Unknown (5)": "standard, colour noise",
         "Unknown (6)": "high, colour noise",

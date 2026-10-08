@@ -31,6 +31,22 @@ final class PanasonicLookParsingTests: XCTestCase {
         XCTAssertEqual(summary(metadata), "HardKnott-sRGB33 | base Monochrome")
     }
 
+    /// P1000054: two LUTs stacked on a saved custom style.
+    func testTwoStackedLutsOnACustomStyleAreAllReported() {
+        let metadata: [String: Any] = [
+            "Panasonic:PhotoStyle": "Standard or Custom",
+            "Panasonic:LUT1Name": "Catbells_sRGB33", "Panasonic:LUT1Opacity": 60,
+            "Panasonic:LUT2Name": "HardKnott_sRGB33", "Panasonic:LUT2Opacity": 70,
+            "Panasonic:Panasonic_0x00d5": "MY PHOTO STYLE 3[...]",
+        ]
+
+        XCTAssertEqual(
+            summary(metadata),
+            "DualLUT | base Standard | style MY PHOTO STYLE 3 | lut 1 Catbells-sRGB33 60% | "
+                + "lut 2 HardKnott-sRGB33 70%")
+        XCTAssertEqual(ArtFilterTokenParsing.token(from: metadata), "DualLUT")
+    }
+
     func testAPartLutOpacityIsReported() {
         let metadata: [String: Any] = [
             "Panasonic:PhotoStyle": "Scenery", "Panasonic:LUT1Name": "Scafell_sRGB33",
