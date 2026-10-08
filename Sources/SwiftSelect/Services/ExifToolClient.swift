@@ -118,11 +118,14 @@ struct ExifToolClient: MetadataWriter {
     /// `Caption-Abstract` rides along because ImageIO reads it back empty on camera-original
     /// JPEGs, and this pass already visits every file at folder load. `SerialNumber` rides along
     /// for `ShotIdentity`: it sits in the Olympus maker note, which ImageIO does not expose.
+    ///
+    /// `SequenceNumber` is the Panasonic counterpart of `DriveMode`'s shot index, read for the
+    /// Lumix S9.
     private static let groupingArguments = [
         "-j", "-s", "-n", "-u",
         "-DriveMode", "-Olympus_CameraSettings_0x0605", "-StackedImage",
         "-ArtFilterEffect", "-PictureMode", "-ExposureCompensation", "-Caption-Abstract",
-        "-SerialNumber",
+        "-SerialNumber", "-SequenceNumber",
     ]
 
     /// Five tags is a fraction of a full read's output, so this runs in much larger chunks than
@@ -165,7 +168,7 @@ struct ExifToolClient: MetadataWriter {
     }
 
     static func groupingSignals(from entry: [String: Any]) -> CaptureSignals {
-        CaptureSignals.grouping(
+        var signals = CaptureSignals.grouping(
             driveMode: numbers(entry["DriveMode"]),
             intervalCounter: numbers(entry["Olympus_CameraSettings_0x0605"]),
             stackedImage: numbers(entry["StackedImage"]),
@@ -173,6 +176,15 @@ struct ExifToolClient: MetadataWriter {
                 CaptureSignals.artFilterEffect(numbers(entry["ArtFilterEffect"])),
                 text(entry["PictureMode"]), text(entry["ExposureCompensation"]),
             ])
+        // Panasonic writes no `DriveMode`. Its `SequenceNumber` is 0 on a single shot and counts
+        // from 1 inside a burst or bracket, restarting each time (checked on a Lumix S9 card: a
+        // 3-frame exposure bracket and an 11-frame focus bracket), so it means the same thing.
+        if signals.shotNumber == nil, let sequence = numbers(entry["SequenceNumber"]).first,
+            sequence > 0
+        {
+            signals.shotNumber = sequence
+        }
+        return signals
     }
 
     private static func numbers(_ value: Any?) -> [Int] {
