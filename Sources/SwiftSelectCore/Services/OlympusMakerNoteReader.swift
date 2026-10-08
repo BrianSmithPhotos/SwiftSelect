@@ -2,7 +2,8 @@ import Foundation
 import os
 
 /// Reads the five OM System maker-note tags capture-set grouping needs, by walking the file's own
-/// bytes rather than asking `exiftool`. This is the iPad's only route to them: iOS cannot spawn a
+/// bytes rather than asking `exiftool`. A Lumix frame is read here too, for its one tag: see
+/// `panasonicSignals`. This is the iPad's only route to them: iOS cannot spawn a
 /// subprocess, and ImageIO returns no Olympus maker-note dictionary for these files at all —
 /// `kCGImagePropertyMakerOlympusDictionary` is absent from both the JPEG and the ORF off a real
 /// OM-3 card, even though the note is plainly there in the bytes (see `NativeMetadataReader`'s
@@ -134,6 +135,17 @@ public enum OlympusMakerNoteReader {
         let file = TIFFBytes(data: data, isBigEndian: data[tiff] == 0x4D)
         guard let ifd0 = file.uint32(at: tiff + 4) else { return nil }
 
+        // A Panasonic RW2 keeps its EXIF inside an embedded JPEG (`JpgFromRaw`, tag 0x2E of its
+        // own IFD0) rather than in the RAW's TIFF tree, so the walk restarts on that JPEG. On a
+        // Lumix S9 it begins 6 KB into the file, well inside the head read.
+        if tiff == 0, file.uint16(at: 2) == 0x55 {
+            guard let preview = file.entries(at: ifd0, base: 0).first(where: { $0.tag == 0x2E }),
+                preview.valueOffset < data.count
+            else { return nil }
+            return signals(
+                in: Data(data[preview.valueOffset...]), requiringCompleteRead: requiringCompleteRead)
+        }
+
         // IFD0 -> ExifIFD -> MakerNote, then EXIF's own exposure bias while we are in there: it is
         // part of the render signature and costs nothing extra to read from a walk already made.
         guard let exifPointer = file.entries(at: tiff + ifd0, base: tiff).first(where: { $0.tag == 0x8769 }),
@@ -143,6 +155,12 @@ public enum OlympusMakerNoteReader {
         guard let note = exif.first(where: { $0.tag == 0x927C }) else { return nil }
         let exposure = exif.first { $0.tag == 0x9204 }.flatMap { file.signedRational(at: $0.valueOffset) }
 
+        if file.matches("Panasonic\0\0\0", at: note.valueOffset) {
+            return panasonicSignals(
+                in: file, note: note.valueOffset, tiff: tiff, exposure: exposure,
+                wholeBias: exposure != nil || !exif.contains { $0.tag == 0x9204 },
+                requiringCompleteRead: requiringCompleteRead)
+        }
         guard file.matches("OM SYSTEM\0", at: note.valueOffset) else { return nil }
         let noteBase = note.valueOffset
         guard let settings = file.entries(at: noteBase + 16, base: noteBase)
@@ -184,6 +202,29 @@ public enum OlympusMakerNoteReader {
         if requiringCompleteRead {
             let wholeBias = exposure != nil || !exif.contains { $0.tag == 0x9204 }
             guard !camera.isEmpty, tagsEnd <= data.count, wholeBias else { return nil }
+        }
+        return signals
+    }
+
+    /// The Lumix signals, built to match what `ExifToolClient.groupingSignals` makes of the same
+    /// frame. The Panasonic note is a 12-byte header and then one flat directory whose offsets
+    /// count from the TIFF header, so there is no subdirectory to walk to. The only tag wanted is
+    /// `SequenceNumber` (0x2B): 0 on a single shot, counting from 1 inside a burst or bracket.
+    private static func panasonicSignals(
+        in file: TIFFBytes, note: Int, tiff: Int, exposure: Double?, wholeBias: Bool,
+        requiringCompleteRead: Bool
+    ) -> CaptureSignals? {
+        let entries = file.entries(at: note + 12, base: tiff)
+        // No entries means the directory ran off the end of a prefix, not a bare note.
+        if requiringCompleteRead { guard !entries.isEmpty, wholeBias else { return nil } }
+
+        var signals = CaptureSignals.grouping(
+            driveMode: [], intervalCounter: [], stackedImage: [],
+            render: ["", "", exposure.map { String(format: "%g", $0) } ?? ""])
+        if let sequence = entries.first(where: { $0.tag == 0x2B }).flatMap({ file.numbers(of: $0).first }),
+            sequence > 0
+        {
+            signals.shotNumber = sequence
         }
         return signals
     }

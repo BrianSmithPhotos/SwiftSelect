@@ -27,13 +27,14 @@ deterministically, and copy files into local storage.
   Olympus bodies also write `.ori`: the same RAW format under a second extension, holding the
   un-composited original kept beside a hi-res or composite frame. It counts as a RAW, not a sidecar
   — missing it would leave those originals on the card when their frame is moved. Fujifilm `.raf`
-  and Panasonic `.rw2` (Lumix S9) are browsed and developed too. On the Mac a Lumix burst or
-  bracket groups by the camera's `SequenceNumber`, and a Lumix JPEG gets a look: the token is the
+  and Panasonic `.rw2` (Lumix S9) are browsed and developed too. A Lumix burst or bracket groups by the camera's `SequenceNumber`,
+  on the Mac through exiftool and on the iPad through `OlympusMakerNoteReader`, which reads it
+  from the JPEG and from the JPEG embedded in the `.rw2`. On the Mac a Lumix JPEG gets a look: the token is the
   Real Time LUT's file name (`DualLUT` for two stacked, which the look then lists), else a saved custom style's name, else the photo style unless it is
   Standard, and the strip and `Instructions` add the base style under a LUT or custom style plus
   every dialled setting (contrast, highlights, shadows, saturation, hue, sharpness, noise
   reduction, grain). The `.rw2` gets none of it: the camera applies the look to the JPEG only.
-  The iPad reads neither yet, and Fujifilm frames group by the timestamp gap alone.
+  The iPad does not read the look yet, and Fujifilm frames group by the timestamp gap alone.
 - Videos (`.MOV`, `.MP4`) are browsed in the same grid, with the same Skip — see §9 for everything
   that differs about them.
 - Thumbnails and full preview load off the main thread; RAW files fall back to the embedded

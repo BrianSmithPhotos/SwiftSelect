@@ -250,6 +250,49 @@ final class OlympusMakerNoteReaderTests: XCTestCase {
         }
     }
 
+    // MARK: - Panasonic
+
+    /// A Lumix note: a 12-byte header, then one flat directory holding `SequenceNumber`.
+    private func panasonicNote(sequence: Int) -> [UInt8] {
+        Array("Panasonic\0\0\0".utf8)
+            + ifd([Entry(tag: 0x2B, format: 4, count: 1, payload: le32(sequence))], at: 0)
+    }
+
+    func testReadsALumixSequenceNumberAsTheShotNumber() {
+        let signals = OlympusMakerNoteReader.signals(in: jpeg(tiffBlock(note: panasonicNote(sequence: 4))))
+
+        XCTAssertEqual(signals?.shotNumber, 4)
+        XCTAssertEqual(signals?.renderSignature, "||-0.7")
+    }
+
+    func testALumixSingleShotHasNoShotNumber() {
+        let signals = OlympusMakerNoteReader.signals(in: jpeg(tiffBlock(note: panasonicNote(sequence: 0))))
+
+        XCTAssertNotNil(signals)
+        XCTAssertNil(signals?.shotNumber)
+    }
+
+    /// An RW2 is headed `II` then 0x55 rather than 42, and holds its EXIF in a JPEG hung off tag
+    /// 0x2E of its own first directory.
+    func testReadsALumixRawThroughItsEmbeddedJpeg() {
+        let preview = [UInt8](jpeg(tiffBlock(note: panasonicNote(sequence: 7))))
+        let rawIFD = ifd([Entry(tag: 0x2E, format: 7, count: preview.count, payload: preview)], at: 8)
+        let raw = Data(Array("II".utf8) + le16(0x55) + le32(8) + rawIFD)
+
+        XCTAssertEqual(OlympusMakerNoteReader.signals(in: raw)?.shotNumber, 7)
+    }
+
+    func testALumixPrefixEitherAnswersInFullOrNotAtAll() {
+        let whole = jpeg(tiffBlock(note: panasonicNote(sequence: 4)))
+        let expected = OlympusMakerNoteReader.signals(in: whole)
+
+        for length in 0..<whole.count {
+            let partial = OlympusMakerNoteReader.signals(
+                in: whole.prefix(length), requiringCompleteRead: true)
+            if let partial { XCTAssertEqual(partial, expected, "answered differently from \(length) bytes") }
+        }
+    }
+
     /// The real proof, and the reason the reader exists: it must agree with `exiftool` tag for tag
     /// on frames a camera actually wrote, including the render signature. Point `MPM_TEST_CARD` at
     /// a card or a folder of frames to run it; skipped when it isn't set, since the fixture above
@@ -259,15 +302,15 @@ final class OlympusMakerNoteReaderTests: XCTestCase {
         try XCTSkipIf(path == nil, "set MPM_TEST_CARD to a folder of camera frames to run this")
         let files = try FileManager.default
             .contentsOfDirectory(at: URL(fileURLWithPath: path!), includingPropertiesForKeys: nil)
-            .filter { ["jpg", "jpeg", "orf", "ori"].contains($0.pathExtension.lowercased()) }
+            .filter { ["jpg", "jpeg", "orf", "ori", "rw2"].contains($0.pathExtension.lowercased()) }
         try XCTSkipIf(files.isEmpty, "no camera frames in \(path!)")
 
         let exifTool = try await ExifToolClient().readFolderScan(at: files).signals
 
         for file in files {
-            XCTAssertEqual(
-                OlympusMakerNoteReader.signals(at: file), exifTool[file],
-                "disagreed on \(file.lastPathComponent)")
+            let read = OlympusMakerNoteReader.read(at: file)
+            XCTAssertEqual(read.signals, exifTool[file], "disagreed on \(file.lastPathComponent)")
+            XCTAssertFalse(read.usedWholeFile, "\(file.lastPathComponent) needed the whole file")
         }
     }
 }
