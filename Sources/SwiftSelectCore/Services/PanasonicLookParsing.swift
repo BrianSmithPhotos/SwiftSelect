@@ -166,8 +166,7 @@ public enum PanasonicLookParsing {
 
     /// The white balance as the camera shows it, `AWBw A5 G3`, or `nil` for plain Auto with no
     /// shift. One frame per mode was shot on an S9 to fix the names below; a mode exiftool cannot
-    /// name and no card has held (one colour temperature set is still unseen) is left out rather
-    /// than shown as a number.
+    /// name and no card has held is left out rather than shown as a number.
     ///
     /// The shift signs were read off an S9: a frame dialled to A5 G3 wrote amber-blue -5 and
     /// green-magenta +3, so negative is amber on the first axis and positive is green on the second.
@@ -193,9 +192,11 @@ public enum PanasonicLookParsing {
         "Manual 4": "White set 4",
     ]
 
-    /// The colour temperature sets seen on an S9: raw 13, which exiftool names, then 17 and 18,
-    /// which exiftool 13.55 cannot.
-    private static let kelvinModes: Set<String> = ["Kelvin", "Unknown (17)", "Unknown (18)"]
+    /// The four colour temperature sets of an S9, one frame shot on each: raw 13, which exiftool
+    /// names, then 16, 17 and 18, which exiftool 13.55 cannot.
+    private static let kelvinModes: Set<String> = [
+        "Kelvin", "Unknown (16)", "Unknown (17)", "Unknown (18)",
+    ]
 
     private static func number(_ text: String) -> Double? { Double(text) }
 

@@ -110,6 +110,8 @@ final class PanasonicLookParsingTests: XCTestCase {
             // P1010098-102: the other three white sets and a later colour temperature set.
             ("Manual 2", 5500, (0, 0), "White set 2"), ("Manual 3", 5500, (0, 0), "White set 3"),
             ("Manual 4", 5500, (0, 0), "White set 4"), ("Unknown (18)", 3200, (-3, 2), "3200K A3 G2"),
+            // P1010104: the one colour temperature set not seen until all four were shot.
+            ("Unknown (16)", 5500, (2, -2), "5500K B2 M2"),
         ]
         for (mode, kelvin, shift, row) in expected {
             let metadata: [String: Any] = [
