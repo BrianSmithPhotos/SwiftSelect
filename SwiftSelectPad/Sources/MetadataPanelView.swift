@@ -150,6 +150,9 @@ struct MetadataPanelView: View {
                         Section("Camera") {
                             LabeledContent("Camera", value: asset.cameraModel)
                             LabeledContent("Lens", value: asset.lensModel)
+                            if let look = asset.artFilterToken, !look.isEmpty {
+                                LabeledContent("Look", value: look)
+                            }
                             LabeledContent("Aperture", value: asset.aperture)
                             LabeledContent("Shutter", value: asset.shutterSpeed)
                             LabeledContent("Focal length", value: asset.focalLength)

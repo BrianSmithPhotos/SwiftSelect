@@ -36,7 +36,10 @@ deterministically, and copy files into local storage.
   Standard, and the strip and `Instructions` add the base style under a LUT or custom style plus
   every dialled setting (contrast, highlights, shadows, saturation, hue, sharpness, noise
   reduction, grain, and the white balance mode and shift when it is not plain Auto). The `.rw2` gets none of it: the camera applies the look to the JPEG only.
-  The iPad does not read the look yet, and Fujifilm frames group by the timestamp gap alone.
+  The iPad reads the token only (`PanasonicLookReader`, straight from the JPEG's bytes, checked
+  against exiftool on real frames): it is shown as Look in the Camera section and goes into the
+  filename, keywords and description as on the Mac. The strip and `Instructions` are added by the
+  Mac import. Fujifilm frames group by the timestamp gap alone.
 - Videos (`.MOV`, `.MP4`) are browsed in the same grid, with the same Skip — see §9 for everything
   that differs about them.
 - Thumbnails and full preview load off the main thread; RAW files fall back to the embedded
@@ -434,7 +437,7 @@ exist nowhere but the index, and the photographs they describe are on the NAS.
     verify isn't reading every RAW back over the network. iCloud is ruled out for the same reason as
     Google Drive above: lazily materialized placeholders race with the SHA-256 verify.
   - Per file: read the maker notes with `exiftool` for the art-filter token, read the sidecar back,
-    rebuild the filename (identical to the iPad's, plus the art-filter segment — both apps derive
+    rebuild the filename (identical to the iPad's, plus the Olympus art-filter segment the iPad cannot read; a Lumix look is already in it — both apps derive
     camera/lens/capturedAt from the same reader, so there's no naming drift), and re-run the ordinary
     Process & Move above with the exiftool writer. That write of title/description/keywords/GPS into
     the destination copy *is* the sidecar being folded into the image, and the standard auto-metadata

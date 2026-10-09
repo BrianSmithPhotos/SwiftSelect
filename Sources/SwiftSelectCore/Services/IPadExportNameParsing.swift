@@ -3,8 +3,9 @@ import Foundation
 /// Recovers the two `RenameContext` fields that can't be re-read from a file's metadata out of a
 /// filename `RenameService` already produced.
 ///
-/// Needed because iPad-processed files reach the Mac already renamed, but with the art-filter
-/// segment missing — iOS has no exiftool, so `PhotoAsset.artFilterToken` is always empty there (see
+/// Needed because iPad-processed files reach the Mac already renamed, but with the Olympus
+/// art-filter segment missing — iOS has no exiftool, so `PhotoAsset.artFilterToken` is empty there
+/// for anything but a Lumix look (see
 /// `PhotoBrowserViewModel.process(scope:)`). The Mac import re-runs the rename with the real token,
 /// which means re-supplying the sequence and batch that only exist in the current name: the sequence
 /// came from the camera's original filename, long since replaced, and the batch was a per-session

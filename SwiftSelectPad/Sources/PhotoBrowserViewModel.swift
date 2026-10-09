@@ -979,8 +979,8 @@ final class PhotoBrowserViewModel {
     /// collected and surfaced together afterward via `processStatusMessage`. No-op while a previous
     /// call is still running, and no-op on an empty scope. Unlike the Mac app, there's no
     /// `loadArtFilterTokens` step first: iPad has no exiftool, so `asset.artFilterToken` is whatever
-    /// `NativeMetadataReader` already found — nothing, for Olympus maker notes, a pre-existing
-    /// documented gap.
+    /// folder load found — a Lumix look via `PanasonicLookReader`, and nothing for an Olympus art
+    /// filter, a documented gap the Mac import fills.
     ///
     /// A video takes the other branch: it has no metadata to fold in and no rename to do, so it is
     /// staged under `IPadVideoBundle.stagingDirectory` inside the same package, carrying the batch
@@ -1164,7 +1164,7 @@ final class PhotoBrowserViewModel {
                 skippedPaths = await skippedAssetPaths(inFolder: folderURL)
                 processedAssetPaths = await loadProcessedAssetPaths(inFolder: folderURL)
                 let staged = await applyStagedDrafts(to: loadedAssets)
-                let assets = staged.assets
+                var assets = staged.assets
                 developMarkedPaths = staged.developMarkedPaths
                 let stagedAt = Date()
                 // The same camera signals the Mac groups on, read straight out of the frame's own
@@ -1174,6 +1174,12 @@ final class PhotoBrowserViewModel {
                 // same inputs. Without it the timestamp gap is all there is, which merges bursts
                 // shot back to back and shatters every interval run into singles. See docs/SPEC.md §1.
                 let signals = await OlympusMakerNoteReader.signals(at: assets.map(\.url))
+                // A Lumix look (filter, LUT, photo style) read the same way, so it reaches the
+                // filename, keywords and description here exactly as the Mac import would name it.
+                let lookTokens = await PanasonicLookReader.tokens(at: assets.map(\.url))
+                for index in assets.indices {
+                    if let token = lookTokens[assets[index].url] { assets[index].artFilterToken = token }
+                }
                 let signalsAt = Date()
                 let allSets = grouping.group(assets, signals: signals)
                 Self.loadLogger.log(

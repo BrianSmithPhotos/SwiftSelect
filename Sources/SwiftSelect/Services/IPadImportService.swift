@@ -30,8 +30,9 @@ struct IPadImportSummary: Equatable {
 /// library — the Mac-initiated half of docs/SPEC.md §5's iPad divergence.
 ///
 /// Two things the iPad can't do are made up for here. It has no `exiftool`, so
-/// `PhotoAsset.artFilterToken` is always empty there and the art filter reaches neither the filename
-/// nor the keywords; and its `ProcessMoveService` is built with `NativeMetadataWriter`, which parks
+/// `PhotoAsset.artFilterToken` is empty there for an Olympus frame and the art filter reaches
+/// neither the filename nor the keywords (a Lumix look it does read, via `PanasonicLookReader`,
+/// and this arrives at the same token, so nothing is doubled); and its `ProcessMoveService` is built with `NativeMetadataWriter`, which parks
 /// description/keywords/GPS in an XMP sidecar beside each file rather than writing into image bytes
 /// ImageIO can't safely rewrite. So per file this reads the maker notes, reads the sidecar back, and
 /// re-runs the ordinary `ProcessMoveService` with `ExifToolClient` — whose write of
