@@ -337,18 +337,29 @@ private struct ZoomReadout: View {
     }
 
     var body: some View {
-        Button(action: onReset) {
-            Text(isEnabled ? label : "Fit (crop mode)")
-                .font(.caption.monospacedDigit())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+        Group {
+            if isEnabled {
+                Button(action: onReset) { chip(label) }
+                    .buttonStyle(.plain)
+                    .disabled(isAtFit)
+                    .keyboardShortcut("0", modifiers: .command)
+                    .help("Scroll to zoom. Click to fit (Cmd-0).")
+            } else {
+                // Plain text, not a button: there is nothing to reset here. The wording names the
+                // toggle because a saved "on" otherwise reads as scroll zoom being broken.
+                chip("Fit (Crop to Subject on - zoom off)")
+                    .help("Turn off Crop to Subject in the metadata panel to zoom.")
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled || isAtFit)
-        .keyboardShortcut("0", modifiers: .command)
-        .help(isEnabled ? "Scroll to zoom. Click to fit (Cmd-0)." : "Zoom is off while crop mode is on")
         .accessibilityIdentifier("previewZoomReadout")
+    }
+
+    private func chip(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospacedDigit())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
