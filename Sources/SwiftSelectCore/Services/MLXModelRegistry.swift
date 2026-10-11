@@ -44,6 +44,13 @@ public enum MLXModelRegistry {
             defaultPrompt: "Describe the image in English",
             extraEOSTokens: ["<|im_end|>"]
         ),
+        // Dense `qwen3_5`, the sibling of the two `qwen3_5_moe` entries above. Added when Ollama
+        // 0.40's MLX runner panicked on this same model on an M1 GPU (ollama/ollama#18846).
+        "mlx-community/Qwen3.8-27B-8bit": ModelConfiguration(
+            id: "mlx-community/Qwen3.8-27B-8bit",
+            defaultPrompt: "Describe the image in English",
+            extraEOSTokens: ["<|im_end|>"]
+        ),
         // On-device-oriented FastVLM — see docs/MLX_PROVIDER.md for why this was added (candidate
         // for the iPad's much tighter memory budget vs. the ~20-40GB models above). Deliberately
         // *not* Apple's own `apple/FastVLM-0.5B-fp16` export: that repo's `preprocessor_config

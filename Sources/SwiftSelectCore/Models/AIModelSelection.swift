@@ -54,6 +54,7 @@ public struct AIModelSelection {
         "ollama:moondream:latest",
         "mlx:mlx-community/Qwen3.6-35B-A3B-4.4bit-msq",
         "mlx:mlx-community/Qwen3.6-35B-A3B-8bit",
+        "mlx:mlx-community/Qwen3.8-27B-8bit",
         "mlx:mlx-community/gemma-3-4b-it-4bit",
         "mlx:mlx-community/FastVLM-0.5B-bf16",
     ]
