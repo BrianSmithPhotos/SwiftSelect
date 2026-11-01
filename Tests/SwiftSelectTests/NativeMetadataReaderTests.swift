@@ -133,6 +133,35 @@ final class NativeMetadataReaderTests: XCTestCase {
         XCTAssertEqual(asset.title, "P1010042")
     }
 
+    func testMapToPhotoAssetReadsCaptureUTCOffset() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeSampleJPEG(
+            to: url,
+            extraProperties: [
+                kCGImagePropertyExifDictionary: [
+                    kCGImagePropertyExifDateTimeOriginal: "2026:10:18 15:03:00",
+                    kCGImagePropertyExifOffsetTimeOriginal: "+01:00",
+                ]
+            ])
+
+        let reader = NativeMetadataReader()
+        let asset = reader.mapToPhotoAsset(url: url, metadata: try reader.readMetadata(at: url))
+
+        XCTAssertEqual(asset.captureUTCOffsetSeconds, 3600)
+    }
+
+    func testUTCOffsetSecondsParsesSignedOffsetsAndRejectsJunk() {
+        XCTAssertEqual(NativeMetadataReader.utcOffsetSeconds(fromExifOffset: "+01:00"), 3600)
+        XCTAssertEqual(NativeMetadataReader.utcOffsetSeconds(fromExifOffset: "-07:00"), -25200)
+        XCTAssertEqual(NativeMetadataReader.utcOffsetSeconds(fromExifOffset: "+05:30"), 19800)
+        XCTAssertNil(NativeMetadataReader.utcOffsetSeconds(fromExifOffset: ""))
+        XCTAssertNil(NativeMetadataReader.utcOffsetSeconds(fromExifOffset: "01:00"))
+        XCTAssertNil(NativeMetadataReader.utcOffsetSeconds(fromExifOffset: "+1:00"))
+    }
+
     func testExtractPreviewReturnsImageMatchingSourceDimensions() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

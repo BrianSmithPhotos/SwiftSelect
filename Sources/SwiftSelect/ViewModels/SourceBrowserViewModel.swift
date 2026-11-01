@@ -527,6 +527,9 @@ final class SourceBrowserViewModel {
                 applyCaptions(scan.captions, to: &assets)
                 for index in assets.indices {
                     assets[index].cameraSerial = scan.serials[assets[index].url] ?? ""
+                    if assets[index].captureUTCOffsetSeconds == nil {
+                        assets[index].captureUTCOffsetSeconds = scan.utcOffsets[assets[index].url]
+                    }
                 }
                 skippedPaths = await skippedAssetPaths(inFolder: folderURL)
                 processedAssetPaths = await loadProcessedAssetPaths(inFolder: folderURL)
@@ -1154,11 +1157,10 @@ final class SourceBrowserViewModel {
         guard let id = selectedAssetID, let asset = selectedAsset,
             asset.gpsLatitude == nil, asset.gpsLongitude == nil,
             editableLatitudeText.isEmpty, editableLongitudeText.isEmpty,
-            let capturedAt = asset.capturedAt
+            let captureTimestampUTC = asset.captureTimestampUTC
         else { return }
         guard let cache = await ensureTimelineCache() else { return }
 
-        let captureTimestampUTC = Int(capturedAt.timeIntervalSince1970)
         guard let suggestion = try? await cache.suggestion(forCaptureTimestampUTC: captureTimestampUTC),
             selectedAssetID == id
         else { return }
@@ -1310,12 +1312,12 @@ final class SourceBrowserViewModel {
     /// Altitude is never taken from Timeline itself (SPEC.md §7), which is why the elevation call is
     /// chained here rather than left to the caller.
     private func timelineGPSCoordinate(for asset: PhotoAsset) async -> GPSCoordinate? {
-        guard let capturedAt = asset.capturedAt, let cache = await ensureTimelineCache() else {
+        guard let captureTimestampUTC = asset.captureTimestampUTC, let cache = await ensureTimelineCache() else {
             return nil
         }
         guard
             let suggestion = try? await cache.suggestion(
-                forCaptureTimestampUTC: Int(capturedAt.timeIntervalSince1970))
+                forCaptureTimestampUTC: captureTimestampUTC)
         else { return nil }
         return GPSCoordinate(
             latitude: suggestion.latitude, longitude: suggestion.longitude,

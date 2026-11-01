@@ -150,4 +150,52 @@ final class PhotoAssetLoaderTests: XCTestCase {
         XCTAssertEqual(assets.count, fileCount)
         XCTAssertEqual(Set(assets.map(\.url.lastPathComponent)), expectedNames)
     }
+
+    // MARK: - Capture UTC offset
+
+    /// 2026-10-18 15:03:00 on the camera's clock, read the way `NativeMetadataReader` reads it: as
+    /// this device's local time, whatever zone the test machine is in.
+    private static let cameraWallClock: Date = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar.date(from: DateComponents(year: 2026, month: 10, day: 18, hour: 15, minute: 3))!
+    }()
+
+    /// The same wall clock as a real instant on a camera set to UTC+1: 14:03:00 UTC.
+    private static let trueInstantUTC = 1_792_332_180
+
+    private func asset(_ name: String, offset: Int? = nil) -> PhotoAsset {
+        var asset = PhotoAsset(id: URL(fileURLWithPath: "/card/DCIM/\(name)"))
+        asset.capturedAt = Self.cameraWallClock
+        asset.captureUTCOffsetSeconds = offset
+        return asset
+    }
+
+    func testCaptureTimestampUTCAppliesTheCameraOffset() {
+        XCTAssertEqual(asset("P1010434.JPG", offset: 3600).captureTimestampUTC, Self.trueInstantUTC)
+    }
+
+    func testCaptureTimestampUTCWithoutOffsetKeepsTheWallClockAsRead() {
+        XCTAssertEqual(
+            asset("P1010434.RW2").captureTimestampUTC, Int(Self.cameraWallClock.timeIntervalSince1970))
+    }
+
+    func testRAWTakesTheOffsetOfItsSameNamedJPEG() {
+        let filled = PhotoAssetLoader.fillingCaptureOffsetsFromSiblings([
+            asset("P1010434.RW2"), asset("P1010434.JPG", offset: 3600), asset("P1010435.RW2"),
+        ])
+
+        XCTAssertEqual(filled.map(\.captureUTCOffsetSeconds), [3600, 3600, nil])
+        XCTAssertEqual(filled[0].captureTimestampUTC, Self.trueInstantUTC)
+    }
+
+    /// A reused filename from another shoot shares the stem but not the capture time.
+    func testSiblingWithADifferentCaptureTimeLendsNoOffset() {
+        var other = asset("P1010434.JPG", offset: 3600)
+        other.capturedAt = Self.cameraWallClock.addingTimeInterval(60)
+
+        let filled = PhotoAssetLoader.fillingCaptureOffsetsFromSiblings([asset("P1010434.RW2"), other])
+
+        XCTAssertNil(filled[0].captureUTCOffsetSeconds)
+    }
 }

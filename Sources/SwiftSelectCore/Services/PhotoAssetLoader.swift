@@ -141,6 +141,29 @@ public struct PhotoAssetLoader {
             }
         }
 
-        return assets
+        return fillingCaptureOffsetsFromSiblings(assets)
+    }
+
+    /// Gives a file with no UTC offset the one its same-named sibling carries (P1010434.RW2 from
+    /// P1010434.JPG). ImageIO reads `OffsetTimeOriginal` from a Lumix JPEG but not from its RW2, and
+    /// the iPad has no exiftool to fill it, so the pair is the only source there. The capture times
+    /// must agree too, so two unrelated files that merely share a stem never trade offsets.
+    static func fillingCaptureOffsetsFromSiblings(_ assets: [PhotoAsset]) -> [PhotoAsset] {
+        var offsetByShot: [String: Int] = [:]
+        for asset in assets {
+            guard let offset = asset.captureUTCOffsetSeconds, let key = shotKey(asset) else { continue }
+            offsetByShot[key] = offset
+        }
+        return assets.map { asset in
+            guard asset.captureUTCOffsetSeconds == nil, let key = shotKey(asset) else { return asset }
+            var filled = asset
+            filled.captureUTCOffsetSeconds = offsetByShot[key]
+            return filled
+        }
+    }
+
+    private static func shotKey(_ asset: PhotoAsset) -> String? {
+        guard let capturedAt = asset.capturedAt else { return nil }
+        return "\(asset.url.deletingPathExtension().path)|\(capturedAt.timeIntervalSince1970)"
     }
 }

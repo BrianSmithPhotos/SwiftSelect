@@ -1366,11 +1366,10 @@ final class PhotoBrowserViewModel {
             let captureSet = selectedCaptureSet,
             let asset = previewAsset,
             asset.gpsLatitude == nil, asset.gpsLongitude == nil,
-            let capturedAt = asset.capturedAt
+            let captureTimestampUTC = asset.captureTimestampUTC
         else { return }
         guard let cache = await ensureTimelineCache() else { return }
 
-        let captureTimestampUTC = Int(capturedAt.timeIntervalSince1970)
         guard let suggestion = try? await cache.suggestion(forCaptureTimestampUTC: captureTimestampUTC),
             previewAsset?.id == asset.id
         else { return }
@@ -1505,12 +1504,12 @@ final class PhotoBrowserViewModel {
     private func applyTimelineGPS(
         to captureSet: CaptureSet
     ) async -> (latitude: Double, longitude: Double)? {
-        guard let capturedAt = captureSet.representative?.capturedAt,
+        guard let captureTimestampUTC = captureSet.representative?.captureTimestampUTC,
             let cache = await ensureTimelineCache()
         else { return nil }
         guard
             let suggestion = try? await cache.suggestion(
-                forCaptureTimestampUTC: Int(capturedAt.timeIntervalSince1970))
+                forCaptureTimestampUTC: captureTimestampUTC)
         else { return nil }
 
         let targetIDs = captureSet.members

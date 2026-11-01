@@ -24,7 +24,24 @@ public struct PhotoAsset: Identifiable, Hashable {
     /// Olympus maker note, so the Mac fills it from the folder-load `exiftool` pass.
     public var cameraSerial: String = ""
 
+    /// The camera's wall clock read as if it were this device's time zone — renames and the grid
+    /// rely on that, so it shows the digits the camera recorded. It is only the true instant when
+    /// the camera was set to this device's zone; `captureTimestampUTC` is the true instant.
     public var capturedAt: Date?
+    /// The camera's own UTC offset for `capturedAt` (EXIF `OffsetTimeOriginal`, "+01:00" -> 3600),
+    /// or nil when the file carries none.
+    public var captureUTCOffsetSeconds: Int?
+
+    /// The real capture instant, for matching against Timeline's UTC points. Without the camera's
+    /// offset this falls back to `capturedAt` as-is, which is right only when camera and device
+    /// share a zone: a camera on UK time read on a Mac on Pacific time lands 8 hours late.
+    public var captureTimestampUTC: Int? {
+        guard let capturedAt else { return nil }
+        let asRead = Int(capturedAt.timeIntervalSince1970)
+        guard let captureUTCOffsetSeconds else { return asRead }
+        return asRead + TimeZone.current.secondsFromGMT(for: capturedAt) - captureUTCOffsetSeconds
+    }
+
     public var artFilterToken: String?
     /// The in-camera creative-dial settings (see `CameraLookParsing`), read from the same lazy
     /// `exiftool` pass as `artFilterToken` and `nil` for anything that wasn't shot with the dial

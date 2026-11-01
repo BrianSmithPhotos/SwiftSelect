@@ -100,6 +100,9 @@ public struct NativeMetadataReader: Sendable {
         if let dateText = exif[kCGImagePropertyExifDateTimeOriginal as String] as? String {
             asset.capturedAt = Self.parseExifDate(dateText)
         }
+        if let offsetText = exif[kCGImagePropertyExifOffsetTimeOriginal as String] as? String {
+            asset.captureUTCOffsetSeconds = Self.utcOffsetSeconds(fromExifOffset: offsetText)
+        }
 
         if let latitude = Self.doubleValue(gps[kCGImagePropertyGPSLatitude as String]),
             let latitudeRef = gps[kCGImagePropertyGPSLatitudeRef as String] as? String
@@ -191,5 +194,16 @@ public struct NativeMetadataReader: Sendable {
         formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
         formatter.timeZone = TimeZone.current
         return formatter.date(from: text)
+    }
+
+    /// EXIF `OffsetTimeOriginal` ("+01:00", "-07:00") as seconds east of UTC. Public for the Mac's
+    /// exiftool folder scan, which reads the same tag from RAWs that ImageIO leaves it off (RW2).
+    public static func utcOffsetSeconds(fromExifOffset text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count == 6, let sign = trimmed.first, sign == "+" || sign == "-" else { return nil }
+        let parts = trimmed.dropFirst().split(separator: ":")
+        guard parts.count == 2, let hours = Int(parts[0]), let minutes = Int(parts[1]) else { return nil }
+        let seconds = hours * 3600 + minutes * 60
+        return sign == "-" ? -seconds : seconds
     }
 }

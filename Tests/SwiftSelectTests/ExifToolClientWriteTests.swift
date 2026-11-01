@@ -455,6 +455,24 @@ final class ExifToolClientWriteTests: XCTestCase {
         XCTAssertNil(scan.serials[blank])
     }
 
+    /// The offset rides the folder-load pass for the RAWs ImageIO reads it from (none, for RW2).
+    func testFolderScanReadsCaptureUTCOffsets() async throws {
+        let withOffset = try makeTempFile()
+        let blank = try makeTempFile()
+        let client = ExifToolClient()
+        let stamp = Process()
+        stamp.executableURL = URL(fileURLWithPath: ExifToolClient.exiftoolPath)
+        stamp.arguments = ["-q", "-overwrite_original", "-OffsetTimeOriginal=+01:00", withOffset.path]
+        try stamp.run()
+        stamp.waitUntilExit()
+        XCTAssertEqual(stamp.terminationStatus, 0)
+
+        let scan = try await client.readFolderScan(at: [withOffset, blank])
+
+        XCTAssertEqual(scan.utcOffsets[withOffset], 3600)
+        XCTAssertNil(scan.utcOffsets[blank])
+    }
+
     // MARK: - Modification time
 
     /// A photograph with no EXIF date is dated by its modification time, both by the photo index and

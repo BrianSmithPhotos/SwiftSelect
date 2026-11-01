@@ -125,11 +125,15 @@ struct ExifToolClient: MetadataWriter {
     /// Lumix S9. `WBShiftAB` and `WBShiftGM` are the only thing separating the three frames of its
     /// white balance bracket, and `FilterEffect` the only thing separating a filtered JPEG from the
     /// plain one the camera can save beside it.
+    ///
+    /// `OffsetTimeOriginal` is the camera's UTC offset, which ImageIO leaves off a Lumix RW2; without it
+    /// a RAW-only shot is matched to Timeline as if the camera were on this Mac's zone.
     private static let groupingArguments = [
         "-j", "-s", "-n", "-u",
         "-DriveMode", "-Olympus_CameraSettings_0x0605", "-StackedImage",
         "-ArtFilterEffect", "-PictureMode", "-ExposureCompensation", "-Caption-Abstract",
         "-SerialNumber", "-SequenceNumber", "-WBShiftAB", "-WBShiftGM", "-FilterEffect",
+        "-OffsetTimeOriginal",
     ]
 
     /// Five tags is a fraction of a full read's output, so this runs in much larger chunks than
@@ -142,6 +146,7 @@ struct ExifToolClient: MetadataWriter {
         var signals: [URL: CaptureSignals] = [:]
         var captions: [URL: String] = [:]
         var serials: [URL: String] = [:]
+        var utcOffsets: [URL: Int] = [:]
     }
 
     /// Reads a whole folder's `FolderScan` at once.
@@ -166,6 +171,9 @@ struct ExifToolClient: MetadataWriter {
                 // `-n` returns the maker note's fixed-width field, serial then padding spaces.
                 let serial = Self.text(entry["SerialNumber"]).trimmingCharacters(in: .whitespaces)
                 if !serial.isEmpty { scan.serials[url] = serial }
+                if let offset = NativeMetadataReader.utcOffsetSeconds(fromExifOffset: Self.text(entry["OffsetTimeOriginal"])) {
+                    scan.utcOffsets[url] = offset
+                }
             }
         }
         return scan
