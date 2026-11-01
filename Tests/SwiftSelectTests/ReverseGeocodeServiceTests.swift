@@ -83,6 +83,44 @@ final class ReverseGeocodeServiceTests: XCTestCase {
         XCTAssertEqual(result.state, "Oregon")
     }
 
+    /// Nominatim's zoom 14 answer for Byland Abbey: the hamlet is the place, the village the city,
+    /// and the parish ("suburb") is passed over for the more specific hamlet.
+    func testLookupLocationReadsTheHamletAsPlaceAndTheVillageAsCity() async throws {
+        MockURLProtocol.requestHandler = { [self] request in
+            jsonResponse(
+                for: request,
+                body: #"""
+                {"address": {"isolated_dwelling": "Abbey Cottage", "hamlet": "Byland Abbey",
+                              "suburb": "Byland with Wass", "village": "Wass",
+                              "county": "North Yorkshire", "state": "England"}}
+                """#)
+        }
+        let service = ReverseGeocodeService(session: makeSession())
+
+        let result = try await service.lookupLocation(latitude: 54.2, longitude: -1.16)
+
+        XCTAssertEqual(result.place, "Byland Abbey")
+        XCTAssertEqual(result.city, "Wass")
+        XCTAssertEqual(result.keywordTokens, ["Byland Abbey", "Wass", "North Yorkshire", "England"])
+        XCTAssertEqual(
+            result.contextText,
+            "place=Byland Abbey; city=Wass; county=North Yorkshire; state=England")
+    }
+
+    func testLookupLocationReadsACityDistrictAsPlace() async throws {
+        MockURLProtocol.requestHandler = { [self] request in
+            jsonResponse(
+                for: request,
+                body: #"{"address": {"suburb": "Pimlico", "city": "City of Westminster", "state": "England"}}"#)
+        }
+        let service = ReverseGeocodeService(session: makeSession())
+
+        let result = try await service.lookupLocation(latitude: 51.49, longitude: -0.15)
+
+        XCTAssertEqual(result.place, "Pimlico")
+        XCTAssertEqual(result.city, "City of Westminster")
+    }
+
     func testLookupLocationSetsUserAgentAndQueryParameters() async throws {
         var capturedRequest: URLRequest?
         MockURLProtocol.requestHandler = { [self] request in
@@ -100,6 +138,7 @@ final class ReverseGeocodeServiceTests: XCTestCase {
         let queryItems = try XCTUnwrap(components.queryItems)
         XCTAssertEqual(queryItems.first { $0.name == "lat" }?.value, "45.5000000")
         XCTAssertEqual(queryItems.first { $0.name == "lon" }?.value, "-122.6000000")
+        XCTAssertEqual(queryItems.first { $0.name == "zoom" }?.value, "14")
     }
 
     func testLookupLocationThrowsNoLocationFoundWhenAddressHasNoUsableFields() async {
@@ -142,6 +181,13 @@ final class ReverseGeocodeServiceTests: XCTestCase {
     func testContextTextJoinsOnlyPresentFields() {
         let result = ReverseGeocodeResult(city: "Portland", county: "", state: "Oregon")
         XCTAssertEqual(result.contextText, "city=Portland; state=Oregon")
+    }
+
+    /// A place named the same as its town adds nothing, so it is not repeated.
+    func testPlaceMatchingTheCityIsNotRepeated() {
+        let result = ReverseGeocodeResult(city: "Coxwold", county: "", state: "England", place: "Coxwold")
+        XCTAssertEqual(result.keywordTokens, ["Coxwold", "England"])
+        XCTAssertEqual(result.contextText, "city=Coxwold; state=England")
     }
 }
 

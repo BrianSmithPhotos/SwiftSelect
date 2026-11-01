@@ -17,15 +17,20 @@ public struct ReverseGeocodeResult: Equatable {
     /// deriving a country/state code some other way. `nil` when Nominatim doesn't report an
     /// admin-level-4 boundary for the coordinate (some countries use a different admin level).
     public var stateRegionCode: String? = nil
+    /// The named spot inside the town or village (hamlet, district, suburb): "Byland Abbey" inside
+    /// Wass, "Pimlico" inside the City of Westminster. The level that actually tells the AI where a
+    /// photo was taken; city and county alone read "North Yorkshire" for a whole abbey series.
+    public var place: String = ""
 
     public var keywordTokens: [String] {
-        [city, county, state]
+        [place == city ? "" : place, city, county, state]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
 
     public var contextText: String {
         var parts: [String] = []
+        if !place.isEmpty, place != city { parts.append("place=\(place)") }
         if !city.isEmpty { parts.append("city=\(city)") }
         if !county.isEmpty { parts.append("county=\(county)") }
         if !state.isEmpty { parts.append("state=\(state)") }
@@ -55,7 +60,9 @@ public struct ReverseGeocodeService {
             URLQueryItem(name: "lon", value: String(format: "%.7f", longitude)),
             URLQueryItem(name: "format", value: "jsonv2"),
             URLQueryItem(name: "addressdetails", value: "1"),
-            URLQueryItem(name: "zoom", value: "10"),
+            // 14 reaches hamlets and districts. 10 stops at the county for a rural point, and 18
+            // names the nearest building (a pub, a rail depot), which would mislead the AI.
+            URLQueryItem(name: "zoom", value: "14"),
         ]
 
         var request = URLRequest(url: components.url!)
@@ -76,15 +83,17 @@ public struct ReverseGeocodeService {
         else { throw ReverseGeocodeError.noLocationFound }
 
         let city = Self.firstNonEmpty(
-            address, keys: ["city", "town", "village", "hamlet", "municipality", "locality", "suburb"])
+            address, keys: ["city", "town", "village", "municipality"])
+        let place = Self.firstNonEmpty(
+            address, keys: ["hamlet", "suburb", "neighbourhood", "quarter", "locality"])
         let county = Self.firstNonEmpty(address, keys: ["county", "state_district"])
         let state = Self.firstNonEmpty(address, keys: ["state", "region"])
-        guard !city.isEmpty || !county.isEmpty || !state.isEmpty else {
+        guard !place.isEmpty || !city.isEmpty || !county.isEmpty || !state.isEmpty else {
             throw ReverseGeocodeError.noLocationFound
         }
         let stateRegionCode = address["ISO3166-2-lvl4"] as? String
         return ReverseGeocodeResult(
-            city: city, county: county, state: state, stateRegionCode: stateRegionCode)
+            city: city, county: county, state: state, stateRegionCode: stateRegionCode, place: place)
     }
 
     private static func firstNonEmpty(_ address: [String: Any], keys: [String]) -> String {

@@ -600,8 +600,8 @@ default settings, the point being Apple's engine applied to the file as the came
   altitude blank from timeline matching and separately look it up from a ground-elevation service
   (e.g. USGS EPQS) keyed by the applied lat/lon. Cache elevation lookups by rounded coordinate to
   avoid redundant network calls for capture sets shot at the same spot.
-- Reverse geocoding: once GPS is set (embedded or Timeline-suggested), look up city/county/state
-  (via OpenStreetMap Nominatim) once per capture set per session, merge the non-blank fields into the
+- Reverse geocoding: once GPS is set (embedded or Timeline-suggested), look up place/city/county/state
+  (via OpenStreetMap Nominatim at zoom 14, so a rural photo gets its hamlet, not just its county) once per capture set per session, merge the non-blank fields into the
   keyword edit buffer, and keep the result available as AI prompt context (§6).
 
 ## 8. Privacy / repo hygiene

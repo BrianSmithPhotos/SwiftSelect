@@ -177,7 +177,7 @@ See `docs/ARCHITECTURE.md` "iPad file access & sidecar staging" for the full rea
 user-verified: a Settings sheet locates `Timeline.json` in the Google Drive Files provider once
 (persisted as a security-scoped bookmark and re-imported silently on later launches), GPS-less photos
 get a location and altitude suggested from the nearest Timeline point — read-only on iPad, but
-persisted through Save and Process & Move — and once a photo has GPS, city/county/state are merged
+persisted through Save and Process & Move — and once a photo has GPS, place/city/county/state are merged
 into the keyword field via OpenStreetMap Nominatim. AI-assisted suggestions (step 8, first cut) are
 also built and user-verified: a Suggest button in the metadata sheet with two providers — native
 on-device MLX (`mlx:`, e.g. FastVLM-0.5B, which runs in seconds on the M4 iPad) and OpenRouter
