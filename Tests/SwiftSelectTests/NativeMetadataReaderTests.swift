@@ -147,6 +147,37 @@ final class NativeMetadataReaderTests: XCTestCase {
         XCTAssertEqual(preview.height, 1)
     }
 
+    /// A grid's worth of concurrent calls, well past the ~20 that deadlocked RawCamera when these
+    /// ran on the cooperative pool. A JPEG can't reproduce that deadlock; this proves the queue
+    /// bridge returns every result rather than dropping or double-resuming a continuation.
+    func testExtractPreviewAsyncCompletesManyConcurrentDecodes() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeSampleJPEG(to: url)
+
+        let widths = try await withThrowingTaskGroup(of: Int.self) { group in
+            for _ in 0..<100 {
+                group.addTask { try await NativeMetadataReader().extractPreviewAsync(at: url, maxPixelSize: 256).width }
+            }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+
+        XCTAssertEqual(widths, Array(repeating: 1, count: 100))
+    }
+
+    func testExtractPreviewAsyncThrowsForMissingFile() async {
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("rw2")
+
+        do {
+            _ = try await NativeMetadataReader().extractPreviewAsync(at: missingURL)
+            XCTFail("Expected an error for a missing file")
+        } catch {}
+    }
+
     func testReadMetadataThrowsForMissingFile() {
         let reader = NativeMetadataReader()
         let missingURL = FileManager.default.temporaryDirectory

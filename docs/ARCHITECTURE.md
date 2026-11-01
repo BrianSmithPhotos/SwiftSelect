@@ -430,6 +430,10 @@ should start there rather than in Swift.
 - UI state mutation must happen back on the main actor — either the
   ViewModel method itself is `@MainActor` and simply `await`s the service call, or you explicitly
   hop back with `await MainActor.run { }`.
+- Blocking work that fans out per tile (RAW preview decodes) goes on a bounded `OperationQueue`
+  bridged with a continuation, not `Task.detached`: `Task.detached` still runs on the cooperative
+  pool, and RawCamera on macOS 27.2 deadlocks permanently once ~20+ decodes block it at once. See
+  `NativeMetadataReader.extractPreviewAsync`. One-off blocking calls may stay detached.
 
 ## exiftool integration
 

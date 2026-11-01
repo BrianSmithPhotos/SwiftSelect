@@ -48,7 +48,7 @@ public enum NativeMetadataError: Error {
 /// file that means the framing is ImageIO's, not the camera's, and need not match the sibling JPEG.)
 /// Also confirmed: ImageIO/`CGImageDestination` gained no new EXIF/IPTC/XMP write coverage in
 /// macOS 27, so `exiftool` remains the only reliable write path — no change to the scope gap above.
-public struct NativeMetadataReader {
+public struct NativeMetadataReader: Sendable {
     public init() {}
 
     /// Reads the raw ImageIO property dictionary (EXIF/IPTC/GPS/TIFF sub-dictionaries) for one
@@ -141,13 +141,29 @@ public struct NativeMetadataReader {
 
     /// Same as `extractPreview(at:maxPixelSize:)` but decodes on a background thread — for
     /// SwiftUI callers, where decoding a RAW preview on the caller's actor would block the UI.
-    /// `Task.detached` is what actually opts out of inheriting the calling `@MainActor` context;
-    /// see docs/ARCHITECTURE.md's concurrency rules.
+    ///
+    /// The decode runs on `previewDecodeQueue`'s ordinary threads, never on Swift's cooperative
+    /// pool (so not `Task.detached`): RawCamera on macOS 27.2 deadlocks for good once roughly 20+
+    /// RAW decodes are blocking cooperative threads at once, which a grid plus filmstrip of RW2
+    /// tiles reaches easily. The same decodes on plain threads finish, even 64 wide (proven with a
+    /// standalone repro, 2026-10-31).
     public func extractPreviewAsync(at url: URL, maxPixelSize: Int = 2048) async throws -> CGImage {
-        try await Task.detached(priority: .userInitiated) {
-            try self.extractPreview(at: url, maxPixelSize: maxPixelSize)
-        }.value
+        try await withCheckedThrowingContinuation { continuation in
+            Self.previewDecodeQueue.addOperation {
+                continuation.resume(with: Result { try self.extractPreview(at: url, maxPixelSize: maxPixelSize) })
+            }
+        }
     }
+
+    /// One decode per core: enough to keep the grid fed, and a cap on how many full-size RAW
+    /// decodes can hold memory at the same moment.
+    private static let previewDecodeQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "photos.briansmith.swiftselect.preview-decode"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = ProcessInfo.processInfo.activeProcessorCount
+        return queue
+    }()
 
     private static func doubleValue(_ value: Any?) -> Double? {
         (value as? NSNumber)?.doubleValue
