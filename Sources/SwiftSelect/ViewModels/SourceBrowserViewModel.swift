@@ -17,7 +17,14 @@ import SwiftSelectCore
 @MainActor
 @Observable
 final class SourceBrowserViewModel {
-    private(set) var captureSets: [CaptureSet] = []
+    private(set) var captureSets: [CaptureSet] = [] {
+        didSet { developedRAWURLs = Set(captureSets.flatMap(\.members).compactMap(\.derivedFrom)) }
+    }
+    /// RAWs some loaded member was developed from. Kept in step with `captureSets` rather than
+    /// derived on each read: `canDevelopRAW(scope:)` runs once per grid and filmstrip tile on every
+    /// view update, and rebuilding this from every member each time pinned the main thread during
+    /// a batch AI run.
+    private var developedRAWURLs: Set<URL> = []
     /// Capture sets skipped in the current folder — populated alongside `captureSets` in `load(_:)`
     /// and kept in sync by `skip(_:)`/`unskip(_:)`. Only ever shown by `SourcePanelView`'s
     /// "Skipped" segmented-filter view; not selectable for editing or process/move.
@@ -1801,9 +1808,8 @@ final class SourceBrowserViewModel {
     }
 
     private func rawAssetsNeedingDevelop(in scope: ProcessMoveScope) -> [PhotoAsset] {
-        let alreadyDeveloped = Set(captureSets.flatMap(\.members).compactMap(\.derivedFrom))
-        return scope.assets.filter {
-            PhotoAssetLoader.isRaw($0.url) && !alreadyDeveloped.contains($0.url)
+        scope.assets.filter {
+            PhotoAssetLoader.isRaw($0.url) && !developedRAWURLs.contains($0.url)
         }
     }
 

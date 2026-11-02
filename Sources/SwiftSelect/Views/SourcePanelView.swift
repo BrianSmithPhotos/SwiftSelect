@@ -112,6 +112,10 @@ struct SourcePanelView: View {
                 Text(emptyStateMessage)
                     .foregroundStyle(.secondary)
             } else {
+                // Read once per grid update, not per tile: it walks every capture set, so asking
+                // from each tile's context menu cost tiles x sets and pinned the main thread on
+                // every save during a batch AI run.
+                let canMergeSelection = viewModel.canMergeSelection
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: Self.tileSpacing) {
                         ForEach(displayedCaptureSets) { captureSet in
@@ -140,7 +144,7 @@ struct SourcePanelView: View {
                                         Button("Merge into One Capture Set") {
                                             viewModel.mergeSelectedCaptureSets()
                                         }
-                                        .disabled(!viewModel.canMergeSelection)
+                                        .disabled(!canMergeSelection)
                                         if viewModel.isMerged(captureSet) {
                                             Button("Split Apart") { viewModel.splitApart(captureSet) }
                                         }
