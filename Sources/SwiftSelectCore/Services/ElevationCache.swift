@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 /// Local cache of ground-elevation lookups, keyed by coordinate rounded to 4 decimal places
-/// (~11m) — see docs/SPEC.md §7: avoids a redundant USGS EPQS call for every photo in a capture set
+/// (~11m) — see docs/SPEC.md §7: avoids a redundant elevation call for every photo in a capture set
 /// shot at the same spot. Same GRDB-actor shape as `TimelineLocationCache`/`SkipStateStore`.
 public actor ElevationCache {
     private static let coordinatePrecision = 4

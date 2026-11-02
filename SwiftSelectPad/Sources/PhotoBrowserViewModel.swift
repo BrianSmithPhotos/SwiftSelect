@@ -1631,7 +1631,7 @@ final class PhotoBrowserViewModel {
     }
 
     /// Manual altitude re-lookup for the previewed photo's current lat/long — surfaced as a small
-    /// refresh button next to the Altitude field for the rare case the automatic USGS EPQS call
+    /// refresh button next to the Altitude field for the rare case the automatic elevation call
     /// times out (mirrors the Mac app's `refreshAltitude()`). Applies to the whole capture set, the
     /// same scope `suggestGPSIfNeeded()` used. No-op while a lookup's in flight or GPS is blank.
     func refreshAltitude() async {
@@ -1645,8 +1645,8 @@ final class PhotoBrowserViewModel {
     }
 
     /// Looks up (or reads cached) elevation for a coordinate and writes it onto every listed member's
-    /// `gpsAltitude`. Cache-first, then USGS EPQS via `ElevationLookupService`, caching the result —
-    /// same order as the Mac app's `lookupElevation`. Silent on failure (altitude just stays blank).
+    /// `gpsAltitude`. Cache-first, then `ElevationLookupService` (USGS in the US, Open-Meteo
+    /// elsewhere), caching the result — same order as the Mac app's `lookupElevation`. Silent on failure (altitude just stays blank).
     private func lookupElevation(latitude: Double, longitude: Double, memberIDs: [PhotoAsset.ID]) async {
         guard let elevationCache = await ensureElevationCache() else { return }
 

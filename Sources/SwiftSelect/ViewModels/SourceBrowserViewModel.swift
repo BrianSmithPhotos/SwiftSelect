@@ -153,7 +153,7 @@ final class SourceBrowserViewModel {
     var timelineSyncStatusMessage: String?
 
     /// True while `refreshAltitude()` has an elevation lookup in flight — disables the manual
-    /// refresh button so a slow/timed-out USGS EPQS call can't be fired twice concurrently.
+    /// refresh button so a slow/timed-out elevation call can't be fired twice concurrently.
     private(set) var isLookingUpAltitude = false
 
     /// AI vision model used for AI-assisted description/keyword suggestions (docs/SPEC.md §6), in
@@ -1188,8 +1188,8 @@ final class SourceBrowserViewModel {
         updateAsset(id) { $0.gpsAltitude = meters }
     }
 
-    /// Elevation for a coordinate: cache first, then USGS EPQS via `ElevationLookupService`, storing
-    /// what comes back. Returns nil rather than throwing, since altitude is optional metadata and a
+    /// Elevation for a coordinate: cache first, then `ElevationLookupService` (USGS in the US,
+    /// Open-Meteo elsewhere), storing what comes back. Returns nil rather than throwing, since altitude is optional metadata and a
     /// failed lookup just leaves the field blank. Split out of `lookupElevation(for:latitude:longitude:)`
     /// so the batch path can put an altitude on a Timeline coordinate without going through the
     /// selection, which a batch does not have.
@@ -1206,7 +1206,7 @@ final class SourceBrowserViewModel {
     }
 
     /// Manually re-runs the elevation lookup for the current lat/long — surfaced as a small refresh
-    /// button next to the Altitude field for the rare case the automatic USGS EPQS call times out
+    /// button next to the Altitude field for the rare case the automatic elevation call times out
     /// (mirrors the reference app's manual "lookup altitude" button, `gps_coordinator.py`'s
     /// `_start_altitude_lookup`). No-ops while a lookup is already in flight or lat/long is blank.
     func refreshAltitude() async {

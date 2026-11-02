@@ -598,7 +598,7 @@ default settings, the point being Apple's engine applied to the file as the came
   accuracy and WIFI/cell-based positioning has none; timeline `altitude` fields are frequently
   implausible (large fractions negative/underground in the reference app's data). Always leave
   altitude blank from timeline matching and separately look it up from a ground-elevation service
-  (e.g. USGS EPQS) keyed by the applied lat/lon. Cache elevation lookups by rounded coordinate to
+  (USGS EPQS inside the US, Open-Meteo elsewhere) keyed by the applied lat/lon. Cache elevation lookups by rounded coordinate to
   avoid redundant network calls for capture sets shot at the same spot.
 - Reverse geocoding: once GPS is set (embedded or Timeline-suggested), look up place/city/county/state
   (via OpenStreetMap Nominatim at zoom 14, so a rural photo gets its hamlet, not just its county) once per capture set per session, merge the non-blank fields into the
