@@ -13,7 +13,7 @@ compare against for logic that's being ported (e.g. Timeline JSON parsing, GPS m
 
 ## Stack & Tooling
 
-- macOS 15+ / iOS 27+, Swift 5.10, SwiftUI. `swift build` / `swift run` / `swift test` from the repo root, or
+- macOS 27+ / iOS 27+, Swift 5.10, SwiftUI. `swift build` / `swift run` / `swift test` from the repo root, or
   open `Package.swift` directly in Xcode. `Package.swift` itself declares `swift-tools-version: 6.1`
   (required for `mlx-swift-lm`'s macro target) but pins `swiftLanguageModes: [.v5]`, so the app's own
   code still writes and behaves like Swift 5.10 — the manifest-format bump isn't a language bump.
@@ -77,16 +77,16 @@ directly on iPad. **Build constraint:** Foundation Models image input needs the 
 SDK, which currently ships only in **Xcode-beta** — so the whole repo is now built with that
 toolchain. Run `swift build`/`swift test` with
 `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`, and `scripts/build-app-bundle.sh`
-sets it automatically. The deployment floor is macOS 15 / iOS 27. The Mac floor stays below 27
-on purpose: a macOS 26 or 27 floor opts SwiftUI into new window-sizing behaviour that crashes when
-the `.inspector` pane is dragged (proven with a bare repro, 2026-09-25; a 15 floor is fine). So
-`FoundationModelsProvider` keeps its runtime `#available(macOS 27.0, ...)` gates. The cost is
-**no Liquid Glass on Mac**: SwiftPM records the linked SDK as equal to the floor, and AppKit reads
-that to pick the design. Forcing SDK 27 with a 15 floor (linker `-platform_version macos 15.0
-27.0`) brings glass back, but the full app then crashes the same way — the bug comes with the new
-design, not the floor number. Don't retry that until Apple fixes it; retest each macOS 27 update
-with the bare repro (a Feedback package was prepared outside the repo). Glass-only APIs like
-`ToolbarSpacer` and `sharedBackgroundVisibility` do nothing visible until then.
+sets it automatically. The deployment floor is macOS 27 / iOS 27, which gives Liquid Glass on Mac
+(SwiftPM records the linked SDK as equal to the floor, and AppKit reads that to pick the design).
+**The inspector width is fixed on purpose** (`inspectorColumnWidth(445)`, Brian's chosen width): with
+the new design, dragging the `.inspector` divider crashes the app in
+`NSHostingView.updateAnimatedWindowSize` with a window width in the billions. That's an OS bug,
+proven with a bare repro on 2026-09-25 and filed as FB24942070. A fixed width has no divider to drag,
+and on 2026-11-13 showing/hiding both panes, window resizing and full screen all survived. Don't
+make the width adjustable again until Apple fixes it; retest each macOS 27 update with the bare repro
+(a Feedback package was prepared outside the repo). `FoundationModelsProvider` still carries its
+`#available(macOS 27.0, ...)` gates from when the floor was 15; they're harmless.
 
 ## File Safety
 

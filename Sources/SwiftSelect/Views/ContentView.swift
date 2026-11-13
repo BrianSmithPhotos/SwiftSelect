@@ -22,7 +22,9 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: $isMetadataPanelPresented) {
             MetadataPanelView(viewModel: browser)
-                .inspectorColumnWidth(min: 280, ideal: 320)
+                // Fixed, not a min/ideal range: on the macOS 27 design, dragging the inspector
+                // divider crashes AppKit (FB24942070). No divider, no crash. See CLAUDE.md.
+                .inspectorColumnWidth(445)
         }
         .toolbar {
             // The launch import runs before the first folder has finished loading and takes

@@ -642,8 +642,8 @@ value, which it serializes to JSON to cross the shared `chat -> String` seam unc
 `PromptProfile.guided` (the `.full` prompt minus the "return JSON" framing, plus a line pointing at
 the typed `species` field), and `AISuggestionResult.species` carries the field into the iPad's eBird
 `attachScientificNames` binomial lookup. It requires the macOS 27 / iOS 27 SDK (Xcode-beta) to build
-because Foundation Models image input is only there; the Mac deployment floor is macOS 15, so the
-OS requirement is enforced at runtime via `#available` and the other backends still work below 27. See CLAUDE.md "Hardware & model notes"
+because Foundation Models image input is only there. The deployment floor is now macOS 27 / iOS 27;
+the runtime `#available` checks date from a macOS 15 floor and are kept but no longer decide anything. See CLAUDE.md "Hardware & model notes"
 for the toolchain constraint.
 
 `SourceBrowserViewModel.eBirdDisabledModels` gates the eBird candidate-species prompt addition
