@@ -156,6 +156,10 @@ struct SourcePanelView: View {
                         }
                     }
                     .scrollTargetLayout()
+                    // The fixed columns sum to the last measured width. Once the grid scrolls, the
+                    // split view treats that sum as the pane's minimum (any floor), so the pane could
+                    // never narrow to let the columns re-measure. A zero minimum breaks that tie.
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
