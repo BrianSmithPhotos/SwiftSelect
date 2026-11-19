@@ -1587,9 +1587,9 @@ final class SourceBrowserViewModel {
             aiStatusMessage =
                 (result.timeoutRetrySucceeded ? "Suggested (after retry)" : "Suggested")
                 + categorySuffix + sentFromSuffix(sourceAsset: sourceAsset) + "; saving…"
-            let saveStatus = await performSave(scope: .manualSelection(targetAssets))
+            let saveOutcome = await performSave(scope: .manualSelection(targetAssets))
             guard selectedAssetID == id else { return }
-            if let saveStatus {
+            if case .saved = saveOutcome, let saveStatus = saveStatusMessage {
                 aiStatusMessage =
                     "Suggested\(categorySuffix)\(sentFromSuffix(sourceAsset: sourceAsset)); \(saveStatus)"
             }
@@ -1668,6 +1668,12 @@ final class SourceBrowserViewModel {
     /// through, one timeout must not cost the other fifty-nine.
     func runBatchAISuggestion() async {
         guard !isSuggestingAI, !isBatchSuggestingAI else { return }
+        // Every write would hit the busy guard until that save ends; the button is disabled too,
+        // this covers any other caller.
+        guard !isSavingMetadata else {
+            aiStatusMessage = "Wait for the save to finish before suggesting"
+            return
+        }
         guard let selection = AIModelSelection.parse(aiModelText) else {
             aiStatusMessage =
                 "Invalid AI model — expected \"ollama:<model>\", \"openrouter:<model>\", \"google:<model>\", \"mlx:<model>\", or \"foundation:apple\""
@@ -1751,9 +1757,12 @@ final class SourceBrowserViewModel {
 
         // The Timeline coordinate goes in with the write, so a set the batch described ends up
         // located the same way one the user opened does. Nil whenever the photo had its own GPS.
-        await writeMetadata(
+        // Thrown rather than ignored: an answer that did not reach the files is lost, so the run
+        // must count it failed instead of suggested (see `MetadataSaveOutcome`).
+        try await writeMetadata(
             description: description, keywords: merged, gps: context.timelineGPS,
-            to: captureSet.members)
+            to: captureSet.members
+        ).requireWritten()
         // The panel is showing one of these sets if the user left it selected, and it would other-
         // wise keep displaying what the file said before the batch wrote over it.
         if representative.id == selectedCaptureSet?.representative?.id {
@@ -2289,13 +2298,12 @@ final class SourceBrowserViewModel {
         Task { await performSave(scope: scope) }
     }
 
-    /// Does the actual save, returning the final status text (`nil` if a save was already running
-    /// or there was nothing to save) — factored out of `saveMetadata(scope:)` so `suggestAI()` can
-    /// `await` this directly and fold the outcome into its own status caption, instead of the
-    /// caption getting stuck on "saving…" while a fire-and-forget `Task` finishes in the
-    /// background.
+    /// Does the actual save, returning what it did — factored out of `saveMetadata(scope:)` so
+    /// `suggestAI()` can `await` this directly and fold the outcome into its own status caption,
+    /// instead of the caption getting stuck on "saving…" while a fire-and-forget `Task` finishes in
+    /// the background.
     @discardableResult
-    private func performSave(scope: MetadataSaveScope) async -> String? {
+    private func performSave(scope: MetadataSaveScope) async -> MetadataSaveOutcome {
         let targets: [PhotoAsset]
         switch scope {
         case .singleAsset(let asset): targets = [asset]
@@ -2317,21 +2325,24 @@ final class SourceBrowserViewModel {
     @discardableResult
     private func writeMetadata(
         description: String, keywords: [String], gps: GPSCoordinate?, to requested: [PhotoAsset]
-    ) async -> String? {
+    ) async -> MetadataSaveOutcome {
         // Clips are dropped here, not at the caller: a mixed multi-selection, a merged set holding
         // a clip beside its stills, and the batch run all arrive through this one function.
         let targets = MetadataWriteFieldRules.writableTargets(requested)
-        guard !isSavingMetadata else { return nil }
+        guard !isSavingMetadata else { return .busy }
         // Selecting only clips and hitting Save is reachable, and doing nothing without saying so
         // reads as a failed save rather than a scope that had no stills in it.
         guard !targets.isEmpty else {
             saveStatusMessage = requested.isEmpty ? nil : "Nothing to save - a clip carries no description."
-            return nil
+            return .nothingToSave
         }
 
         isSavingMetadata = true
         saveStatusMessage = "Saving…"
         defer { isSavingMetadata = false }
+        // Logged at notice level so a long save's span is on record: an overlap with a batch run
+        // could only be reconstructed from file birth times without these.
+        Self.saveLog.notice("Save started: \(targets.count, privacy: .public) file(s)")
 
         await loadArtFilterTokens(for: targets)
         let assetByID = Dictionary(
@@ -2352,8 +2363,9 @@ final class SourceBrowserViewModel {
         }
 
         let finalStatus: String
+        var failureCount = 0
+        var writtenCount = 0
         do {
-            var failureCount = 0
             var firstFailureReason: String?
             for (key, entries) in groupedTargets {
                 let results = try await exifTool.write(
@@ -2385,6 +2397,13 @@ final class SourceBrowserViewModel {
                         Self.saveLog.error("Save returned no result for \(name, privacy: .public)")
                     }
                 }
+                // One exiftool call per group, so this is the finest progress there is. A 1120-file
+                // save on an SD card takes about ten minutes, and a bare "Saving…" for that long
+                // reads as finished or stuck.
+                writtenCount += entries.count
+                if writtenCount < targets.count {
+                    saveStatusMessage = "Saving… \(writtenCount) of \(targets.count) file(s)"
+                }
             }
             if failureCount == 0 {
                 finalStatus = "Saved to \(targets.count) file(s)."
@@ -2398,11 +2417,14 @@ final class SourceBrowserViewModel {
                 )
             }
         } catch {
+            failureCount = targets.count
             finalStatus = "Save failed: \(error.localizedDescription)"
             Self.saveLog.error("Save failed outright: \(error.localizedDescription, privacy: .public)")
         }
         saveStatusMessage = finalStatus
-        return finalStatus
+        Self.saveLog.notice(
+            "Save finished: \(targets.count, privacy: .public) file(s), \(failureCount, privacy: .public) failed")
+        return .saved(fileCount: targets.count, failureCount: failureCount)
     }
 }
 

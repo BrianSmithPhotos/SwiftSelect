@@ -56,20 +56,20 @@ struct MetadataPanelView: View {
                             Button("Save (This File)") {
                                 viewModel.saveMetadata(scope: .singleAsset(asset))
                             }
-                            .disabled(viewModel.isSavingMetadata)
+                            .disabled(saveIsBlocked)
 
                             Button("Save (Capture Set)") {
                                 guard let captureSet = viewModel.selectedCaptureSet else { return }
                                 viewModel.saveMetadata(scope: .captureSet(captureSet))
                             }
-                            .disabled(viewModel.selectedCaptureSet == nil || viewModel.isSavingMetadata)
+                            .disabled(viewModel.selectedCaptureSet == nil || saveIsBlocked)
 
                             Button("Save (Current Selection)") {
                                 let assets = viewModel.manualSelectionAssets
                                 guard !assets.isEmpty else { return }
                                 viewModel.saveMetadata(scope: .manualSelection(assets))
                             }
-                            .disabled(!viewModel.hasMultiSelection || viewModel.isSavingMetadata)
+                            .disabled(!viewModel.hasMultiSelection || saveIsBlocked)
 
                             if let saveStatusMessage = viewModel.saveStatusMessage {
                                 Text(saveStatusMessage)
@@ -241,6 +241,12 @@ struct MetadataPanelView: View {
         }
     }
 
+    /// A save started mid-batch would make the batch's next writes fail as busy, so the buttons
+    /// wait for the run to end as well as for any save already going.
+    private var saveIsBlocked: Bool {
+        viewModel.isSavingMetadata || viewModel.isBatchSuggestingAI
+    }
+
     /// The batch row, shared by the still form and the video summary so a clip in the preview can
     /// never hide a run that was never about it - `BatchAISuggestionTargets` drops video-only sets
     /// from the count either way.
@@ -264,7 +270,9 @@ struct MetadataPanelView: View {
             ) {
                 viewModel.startBatchAISuggestion()
             }
-            .disabled(viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI)
+            .disabled(
+                viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI
+                    || viewModel.isSavingMetadata)
         }
         Toggle(
             "Re-describe sets that already have a description",

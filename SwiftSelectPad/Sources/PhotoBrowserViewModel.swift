@@ -792,14 +792,15 @@ final class PhotoBrowserViewModel {
         Task { await performSave(scope: scope) }
     }
 
-    private func performSave(scope: MetadataSaveScope) async {
+    @discardableResult
+    private func performSave(scope: MetadataSaveScope) async -> MetadataSaveOutcome {
         let targets: [PhotoAsset]
         switch scope {
         case .singleAsset(let asset): targets = [asset]
         case .captureSet(let captureSet): targets = captureSet.members
         case .manualSelection(let assets): targets = assets
         }
-        await writeMetadata(
+        return await writeMetadata(
             description: editableDescription,
             keywords: MetadataEditParsing.parseKeywords(editableKeywords), to: targets)
     }
@@ -807,24 +808,27 @@ final class PhotoBrowserViewModel {
     /// The staging write itself, on values passed in rather than read off the edit buffer — which is
     /// what lets `runBatchAISuggestion()` stage each capture set the model's own answer for that set,
     /// while the panel's buffer still belongs to whichever set the user has selected.
+    @discardableResult
     private func writeMetadata(
         description: String, keywords: [String], to requested: [PhotoAsset]
-    ) async {
+    ) async -> MetadataSaveOutcome {
         // Clips are dropped here, not at the caller: a mixed multi-selection, a merged set holding
         // a clip beside its stills, and the batch run all arrive through this one function.
         let targets = MetadataWriteFieldRules.writableTargets(requested)
-        guard !isSavingMetadata else { return }
+        guard !isSavingMetadata else { return .busy }
         // Selecting only clips and hitting Save is reachable, and doing nothing without saying so
         // reads as a failed save rather than a scope that had no stills in it.
         guard !targets.isEmpty else {
             saveStatusMessage = requested.isEmpty ? nil : "Nothing to save - a clip carries no description."
-            return
+            return .nothingToSave
         }
 
         isSavingMetadata = true
         saveStatusMessage = "Saving…"
         defer { isSavingMetadata = false }
-        guard let store = await ensureSidecarStagingStore() else { return }
+        guard let store = await ensureSidecarStagingStore() else {
+            return .saved(fileCount: targets.count, failureCount: targets.count)
+        }
 
         var failureCount = 0
         for target in targets {
@@ -848,6 +852,7 @@ final class PhotoBrowserViewModel {
             failureCount == 0
             ? "Saved to \(targets.count) file(s)."
             : "Saved \(targets.count - failureCount)/\(targets.count) file(s); \(failureCount) failed."
+        return .saved(fileCount: targets.count, failureCount: failureCount)
     }
 
     /// `keywords` plus the develop marker when this file is marked. A save rewrites the whole
@@ -1815,6 +1820,12 @@ final class PhotoBrowserViewModel {
     /// through, one timeout must not cost the other fifty-nine.
     func runBatchAISuggestion() async {
         guard !isSuggestingAI, !isBatchSuggestingAI else { return }
+        // Every write would hit the busy guard until that save ends; the button is disabled too,
+        // this covers any other caller.
+        guard !isSavingMetadata else {
+            aiStatusMessage = "Wait for the save to finish before suggesting"
+            return
+        }
         guard let selection = AIModelSelection.parse(aiModelText) else {
             aiStatusMessage =
                 "Invalid AI model — expected \"mlx:<model>\", \"openrouter:<model>\", \"google:<model>\" or \"foundation:apple\""
@@ -1903,7 +1914,10 @@ final class PhotoBrowserViewModel {
         // Members re-read from current state, not from the batch's folder snapshot: `ensureAIContext`
         // may have just applied a Timeline location to them, and staging takes each file's GPS off
         // the asset it is handed.
-        await writeMetadata(description: description, keywords: merged, to: liveMembers(of: captureSet))
+        // Thrown rather than ignored: an answer that did not reach the sidecars is lost, so the run
+        // must count it failed instead of suggested (see `MetadataSaveOutcome`).
+        try await writeMetadata(description: description, keywords: merged, to: liveMembers(of: captureSet))
+            .requireWritten()
         // The panel is showing one of these sets if the user left it selected, and it would other-
         // wise keep displaying what the sidecar said before the batch wrote over it.
         if representative.id == selectedCaptureSet?.representative?.id {

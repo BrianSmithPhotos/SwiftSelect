@@ -217,7 +217,7 @@ struct MetadataPanelView: View {
             }
             .disabled(
                 viewModel.batchAITargetCount == 0 || viewModel.isSuggestingAI
-                    || viewModel.isBatchSuggestingAI)
+                    || viewModel.isBatchSuggestingAI || viewModel.isSavingMetadata)
             if viewModel.isBatchSuggestingAI {
                 Button("Stop") {
                     viewModel.cancelBatchAISuggestion()
@@ -234,6 +234,12 @@ struct MetadataPanelView: View {
         }
     }
 
+    /// A save started mid-batch would make the batch's next writes fail as busy, so the buttons
+    /// wait for the run to end as well as for any save already going.
+    private var saveIsBlocked: Bool {
+        viewModel.isSavingMetadata || viewModel.isBatchSuggestingAI
+    }
+
     private var saveSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -241,20 +247,20 @@ struct MetadataPanelView: View {
                     guard let asset = viewModel.selectedAsset else { return }
                     viewModel.saveMetadata(scope: .singleAsset(asset))
                 }
-                .disabled(viewModel.selectedAsset == nil || viewModel.isSavingMetadata)
+                .disabled(viewModel.selectedAsset == nil || saveIsBlocked)
 
                 Button("Save (Capture Set)") {
                     guard let captureSet = viewModel.selectedCaptureSet else { return }
                     viewModel.saveMetadata(scope: .captureSet(captureSet))
                 }
-                .disabled(viewModel.selectedCaptureSet == nil || viewModel.isSavingMetadata)
+                .disabled(viewModel.selectedCaptureSet == nil || saveIsBlocked)
 
                 Button("Save (Current Selection)") {
                     let assets = viewModel.manualSelectionAssets
                     guard !assets.isEmpty else { return }
                     viewModel.saveMetadata(scope: .manualSelection(assets))
                 }
-                .disabled(!viewModel.hasCurrentSelection || viewModel.isSavingMetadata)
+                .disabled(!viewModel.hasCurrentSelection || saveIsBlocked)
             }
 
             if let saveStatusMessage = viewModel.saveStatusMessage {
