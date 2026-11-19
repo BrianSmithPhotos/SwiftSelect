@@ -1706,6 +1706,7 @@ final class SourceBrowserViewModel {
                 "AI suggestions: \(batchAICompletedCount + 1) of \(batchAITotalCount) — \(name)"
             do {
                 try await suggestAndSave(captureSet, provider: provider, selection: selection)
+                showFinishedSet(captureSet)
             } catch is CancellationError {
                 cancelled = true
                 break
@@ -1726,6 +1727,21 @@ final class SourceBrowserViewModel {
             ? ""
             : "; \(failureCount) failed\(firstFailureReason.map { ": \($0)" } ?? ".")"
         aiStatusMessage = "\(prefix) \(suggested) of \(batchAITotalCount) set(s) suggested\(failures)"
+    }
+
+    /// Selects the set the batch just saved, so its new description stays on screen for as long as
+    /// the next set takes - the set being worked on has nothing to show yet. A run scoped to a grid
+    /// selection keeps that selection; only the preview and the edit fields move.
+    private func showFinishedSet(_ captureSet: CaptureSet) {
+        guard let id = captureSet.representative?.id,
+            displayedCaptureSets.contains(where: { $0.representative?.id == id })
+        else { return }
+        selectedAssetID = id
+        if !hasMultiSelection {
+            multiSelectedIDs = [id]
+            rangeAnchorID = id
+        }
+        refreshVariantStrip()
     }
 
     /// One set of a batch run: its own source image, its own answer, saved to its own members.
