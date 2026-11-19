@@ -86,6 +86,26 @@ final class BatchAISuggestionTargetsTests: XCTestCase {
         XCTAssertEqual(names(targets), ["A.JPG"])
     }
 
+    /// The 2026-11-18 card: a GPS-only save wrote just the app's own effect note on every art-filter
+    /// file, and the next batch run treated all 112 sets as already described.
+    func testArtFilterNoteAloneDoesNotCountAsDescribed() {
+        let folder = [set("A.JPG", description: "In camera effect Key Line II.")]
+
+        let targets = BatchAISuggestionTargets.sets(
+            in: folder, multiSelectedRepresentativeIDs: [], redescribingDescribed: false)
+
+        XCTAssertEqual(names(targets), ["A.JPG"])
+    }
+
+    func testProseBeforeTheArtFilterNoteStillCounts() {
+        let folder = [set("A.JPG", description: "Brown Pelicans. In camera effect Vintage.")]
+
+        let targets = BatchAISuggestionTargets.sets(
+            in: folder, multiSelectedRepresentativeIDs: [], redescribingDescribed: false)
+
+        XCTAssertEqual(names(targets), [])
+    }
+
     /// A RAW+JPEG set where only the RAW carries prose is still a set someone has worked on: a save
     /// writes every member, so description on any member means the set has been described.
     func testDescriptionOnANonRepresentativeMemberCounts() {

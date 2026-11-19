@@ -79,4 +79,11 @@ public enum AutoMetadataRules {
         guard !description.contains(note) else { return description }
         return description.isEmpty ? note : "\(description) \(note)"
     }
+
+    /// The description with any effect note taken out - only what a person or the AI wrote. Every
+    /// save adds the note, even with an empty description, so a GPS-only save leaves note-only text.
+    public static func descriptionWithoutArtFilterNote(_ description: String) -> String {
+        description.replacing(#/In camera effect [^.]+\./#, with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
