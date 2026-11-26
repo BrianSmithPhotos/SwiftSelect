@@ -348,6 +348,9 @@ private struct CaptureTileView: View {
                     }
                 }
                 .clipped()
+                // Clipping trims only the drawing, not hit-testing: a `.fill` thumbnail of a wide frame
+                // (LUMIX 65:24 is 2.7:1) still takes clicks well past each side, so it stole its neighbours.
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         // `.task(id:)` re-runs whenever `asset.id` changes (SwiftUI diffs the id, not just

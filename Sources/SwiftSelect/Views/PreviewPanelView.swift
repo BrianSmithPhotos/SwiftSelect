@@ -310,6 +310,9 @@ private struct VariantTileView: View {
                 }
                 .opacity(isRingSelected ? 1.0 : 0.4)
                 .clipped()
+                // Clipping trims only the drawing, not hit-testing: a `.fill` thumbnail of a wide frame
+                // (LUMIX 65:24 is 2.7:1) still takes clicks well past each side, so it stole its neighbours.
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .task(id: asset.id) {

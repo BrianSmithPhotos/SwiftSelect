@@ -339,6 +339,9 @@ private struct CaptureTileView: View {
                 .padding(6)
             }
             .clipped()
+            // Clipping trims only the drawing, not hit-testing: a `.fill` thumbnail of a wide frame
+            // (LUMIX 65:24 is 2.7:1) still takes clicks well past each side, so it stole its neighbours.
+            .contentShape(Rectangle())
             .overlay(
                 TileTapCatcher { flags in
                     if flags.contains(.command) || flags.contains(.shift) {
