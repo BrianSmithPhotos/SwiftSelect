@@ -128,6 +128,25 @@ final class RawDerivedStoreTests: XCTestCase {
         try store.discard(for: original)
     }
 
+    /// Counts and clears every derivative, processed or not, but leaves a non-JPEG alone.
+    func testUsageAndClearAllCoverOnlyDerivatives() throws {
+        let store = try makeStore()
+        let first = try store.derivedURL(for: try makeOriginal(named: "P1010042.ORF"))
+        let second = try store.derivedURL(for: try makeOriginal(named: "P1010043.ORF"))
+        try writeBlankJPEG(to: first)
+        try writeBlankJPEG(to: second)
+        let stray = first.deletingLastPathComponent().appendingPathComponent("notes.txt")
+        try Data("keep".utf8).write(to: stray)
+
+        let usage = try store.usage()
+        XCTAssertEqual(usage.count, 2)
+        XCTAssertGreaterThan(usage.bytes, 0)
+
+        XCTAssertEqual(try store.clearAll(), 2)
+        XCTAssertEqual(try store.usage().count, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
+    }
+
     /// Only iPadOS's "no Trash on this volume" error permits an outright delete; anything else
     /// (here, a permissions failure) must still surface rather than delete.
     func testOnlyAMissingTrashFallsBackToDeleting() {

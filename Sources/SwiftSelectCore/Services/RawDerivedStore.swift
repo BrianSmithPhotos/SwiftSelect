@@ -53,9 +53,41 @@ public struct RawDerivedStore {
     public func discard(for originalURL: URL) throws {
         let url = try derivedURL(for: originalURL)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try Self.remove(url)
+    }
+
+    /// How many derivatives are held and their total size, so Settings can say what a clear would
+    /// remove before it is pressed.
+    public func usage() throws -> (count: Int, bytes: Int64) {
+        let files = try derivativeFiles()
+        let bytes = try files.reduce(Int64(0)) { total, url in
+            total + Int64(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        }
+        return (files.count, bytes)
+    }
+
+    /// Removes every derivative, processed or not. The routine sweep in the iPad's folder load only
+    /// reaches derivatives whose RAW is in the folder being loaded, so once a card is reformatted
+    /// its derivatives are never reached again; this is the manual way out. Same Trash-or-delete
+    /// rule as `discard`.
+    @discardableResult
+    public func clearAll() throws -> Int {
+        let files = try derivativeFiles()
+        for url in files { try Self.remove(url) }
+        return files.count
+    }
+
+    /// Only `.jpg` files, so anything else that ends up in the directory survives a clear.
+    private func derivativeFiles() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: stagingDirectory, includingPropertiesForKeys: [.fileSizeKey]
+        ).filter { $0.pathExtension.lowercased() == "jpg" }
+    }
+
+    private static func remove(_ url: URL) throws {
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        } catch where Self.volumeHasNoTrash(error) {
+        } catch where volumeHasNoTrash(error) {
             try FileManager.default.removeItem(at: url)
         }
     }

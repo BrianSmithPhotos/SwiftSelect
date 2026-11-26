@@ -1264,6 +1264,28 @@ final class PhotoBrowserViewModel {
         }
     }
 
+    /// What "Clear Developed RAW JPEGs" would remove, refreshed when Settings appears.
+    private(set) var developedJPEGUsage: (count: Int, bytes: Int64) = (0, 0)
+    var developedJPEGsStatusMessage: String?
+
+    func refreshDevelopedJPEGUsage() {
+        developedJPEGUsage = (try? rawDerivedStore?.usage()) ?? (0, 0)
+    }
+
+    /// Removes every RAW-developed JPEG held in the app. The folder-load sweep can't reach those
+    /// whose card has since been reformatted, so without this they stay forever. Like
+    /// `clearStagedEdits`, what is on screen is left until the folder is next loaded.
+    func clearDevelopedJPEGs() {
+        guard let rawDerivedStore else { return }
+        do {
+            let removed = try rawDerivedStore.clearAll()
+            developedJPEGsStatusMessage = "Cleared \(removed) developed RAW JPEG(s)."
+        } catch {
+            developedJPEGsStatusMessage = "Could not clear developed RAW JPEGs: \(error.localizedDescription)"
+        }
+        refreshDevelopedJPEGUsage()
+    }
+
     private func ensureSidecarStagingStore() async -> SidecarStagingStore? {
         if let sidecarStagingStore { return sidecarStagingStore }
         do {

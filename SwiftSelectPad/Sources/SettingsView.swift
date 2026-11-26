@@ -23,6 +23,11 @@ struct SettingsView: View {
     @State private var geminiAPIKey = ""
     @State private var eBirdAPIKey = ""
     @State private var isConfirmingClearStagedEdits = false
+    @State private var isConfirmingClearDevelopedJPEGs = false
+
+    private var developedJPEGSize: String {
+        viewModel.developedJPEGUsage.bytes.formatted(.byteCount(style: .file))
+    }
     @State private var newCameraModel = ""
     @State private var newCameraSerial = ""
 
@@ -184,6 +189,34 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
+                    Button(role: .destructive) {
+                        isConfirmingClearDevelopedJPEGs = true
+                    } label: {
+                        Label(
+                            "Clear Developed RAW JPEGs (\(viewModel.developedJPEGUsage.count), "
+                                + "\(developedJPEGSize))",
+                            systemImage: "trash")
+                    }
+                    .disabled(viewModel.developedJPEGUsage.count == 0)
+                    // Attached to the button for the same phantom-presentation reason as above.
+                    .confirmationDialog(
+                        "Clear \(viewModel.developedJPEGUsage.count) developed RAW JPEG(s)?",
+                        isPresented: $isConfirmingClearDevelopedJPEGs, titleVisibility: .visible
+                    ) {
+                        Button("Clear Developed RAW JPEGs", role: .destructive) {
+                            viewModel.clearDevelopedJPEGs()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Processed ones are already in the outgoing folder. One developed but not yet processed is lost, and can be developed again while its RAW is still on the card.")
+                    }
+
+                    if let message = viewModel.developedJPEGsStatusMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 } header: {
                     Text("Staged Edits")
                 } footer: {
@@ -201,6 +234,7 @@ struct SettingsView: View {
                 geminiAPIKey = APIKeyStore.read(account: "GEMINI_API_KEY") ?? ""
                 eBirdAPIKey = APIKeyStore.read(account: "EBIRD_API_KEY") ?? ""
                 viewModel.refreshStagedEditCount()
+                viewModel.refreshDevelopedJPEGUsage()
             }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
