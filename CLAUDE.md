@@ -91,7 +91,9 @@ make the width adjustable again until Apple fixes it; retest each macOS 27 updat
 ## File Safety
 
 - Deleting a file goes through `NSWorkspace.shared.recycle(_:completionHandler:)` or
-  `FileManager.trashItem`, never `FileManager.removeItem`.
+  `FileManager.trashItem`, never `FileManager.removeItem`. One exception: iPadOS has no Trash
+  for the app container, so `RawDerivedStore.discard` deletes a developed JPEG outright only after
+  `trashItem` fails with `featureUnsupported` (3328), and only once process has copied it out.
 - Verify a copy (size + SHA-256 via `CryptoKit`) before treating a source file as safely handled —
   see `docs/SPEC.md` §5.
 

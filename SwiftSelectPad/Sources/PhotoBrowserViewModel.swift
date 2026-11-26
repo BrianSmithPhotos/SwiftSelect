@@ -1031,14 +1031,18 @@ final class PhotoBrowserViewModel {
     private func stagedDerivatives(for assets: [PhotoAsset]) -> [PhotoAsset] {
         guard let store = rawDerivedStore else { return [] }
         let raws = assets.filter { PhotoAssetLoader.isRaw($0.url) }
+        let processedNames = RawDerivedStore.processedDerivativeNames(in: processedAssetPaths)
         for raw in raws {
-            guard let url = try? store.derivedURL(for: raw.url), processedAssetPaths.contains(url.path)
+            guard let url = try? store.derivedURL(for: raw.url), processedNames.contains(url.lastPathComponent)
             else { continue }
             do {
                 try store.discard(for: raw.url)
             } catch {
                 Self.loadLogger.error(
                     "Could not trash spent derivative \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                // Shown as well as logged: the device log needs root to collect, so on the iPad a
+                // logged-only failure is invisible and leftovers pile up unnoticed.
+                processStatusMessage = "Could not remove processed RAW JPEG \(url.lastPathComponent): \(error)"
             }
         }
         return store.derivedAssets(forOriginals: raws)

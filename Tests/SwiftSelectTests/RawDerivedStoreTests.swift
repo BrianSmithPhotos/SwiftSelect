@@ -127,4 +127,22 @@ final class RawDerivedStoreTests: XCTestCase {
         // Discarding again is what happens when a set is processed twice; it must not throw.
         try store.discard(for: original)
     }
+
+    /// Only iPadOS's "no Trash on this volume" error permits an outright delete; anything else
+    /// (here, a permissions failure) must still surface rather than delete.
+    func testOnlyAMissingTrashFallsBackToDeleting() {
+        XCTAssertTrue(RawDerivedStore.volumeHasNoTrash(CocoaError(.featureUnsupported)))
+        XCTAssertFalse(RawDerivedStore.volumeHasNoTrash(CocoaError(.fileWriteNoPermission)))
+    }
+
+    /// Paths recorded under an earlier install's container ID still match by name, and processed
+    /// photos outside the store are ignored.
+    func testProcessedDerivativeNamesIgnoreTheContainerIDAndNonDerivatives() {
+        let paths: Set<String> = [
+            "/var/mobile/Containers/Data/Application/OLD-ID/Library/Application Support/SwiftSelect/RawDerived/19473037_K1096225.ORF.jpg",
+            "/private/var/mobile/Library/LiveFiles/CARD/DCIM/100OMSYS/K1096225.JPG",
+        ]
+        XCTAssertEqual(
+            RawDerivedStore.processedDerivativeNames(in: paths), ["19473037_K1096225.ORF.jpg"])
+    }
 }

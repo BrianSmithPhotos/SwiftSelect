@@ -45,10 +45,33 @@ public struct RawDerivedStore {
     ///
     /// A missing derivative is not an error: the caller discards after a successful process, and
     /// nothing guarantees the develop that produced it happened in this session.
+    ///
+    /// On iPadOS the app container's volume has no Trash, so `trashItem` always fails there with
+    /// `featureUnsupported` (3328, "the volume "User" doesn't have one", seen on device 2026-11-25).
+    /// Only then is the file deleted outright: by this point process has already copied and
+    /// verified it into the outgoing package, so this copy is a duplicate.
     public func discard(for originalURL: URL) throws {
         let url = try derivedURL(for: originalURL)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
-        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch where Self.volumeHasNoTrash(error) {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    static func volumeHasNoTrash(_ error: Error) -> Bool {
+        (error as? CocoaError)?.code == .featureUnsupported
+    }
+
+    /// The derivative filenames among `processedPaths`, for matching by name. A stored full path
+    /// embeds the app container's ID, which iPadOS changes on reinstall, so a path recorded by
+    /// one install never matches the next. The name alone (`<size>_<original>.jpg`) is the key.
+    public static func processedDerivativeNames(in processedPaths: Set<String>) -> Set<String> {
+        Set(
+            processedPaths.map { URL(fileURLWithPath: $0) }
+                .filter { $0.deletingLastPathComponent().lastPathComponent == "RawDerived" }
+                .map(\.lastPathComponent))
     }
 
     /// Reads back every derivative staged for `originals`, ready to merge into the browsing grid.
