@@ -218,7 +218,8 @@ struct IPadImportService {
             cameraModel: asset.cameraModel,
             lensModel: asset.lensModel,
             batch: parsedName.batch,
-            artFilterToken: makerNotes.artFilterToken)
+            artFilterToken: Self.filenameArtFilterToken(
+                keywords: asset.keywords, makerNoteToken: makerNotes.artFilterToken))
 
         do {
             let result = try await processMoveService.processAndCopy(
@@ -306,6 +307,16 @@ struct IPadImportService {
         } catch {
             return (nil, FailureDiagnostics.describe(error))
         }
+    }
+
+    /// The filename's art-filter slot for an imported file. A JPEG the iPad developed itself
+    /// carries its decoder token in the staged keywords and no maker notes at all (a `CIRAWFilter`
+    /// render writes none), so reading the slot from the maker notes alone would drop `RAW9` from
+    /// the name and land the file on the camera JPEG's name with a `_1` suffix. Only the filename
+    /// takes the token: the asset's own `artFilterToken` stays the maker-note one, so no
+    /// "In camera effect" note fires for a render of a RAW.
+    static func filenameArtFilterToken(keywords: [String], makerNoteToken: String) -> String {
+        RawDevelopService.token(in: keywords) ?? makerNoteToken
     }
 
     /// `RenameService` harvests the filename's sequence from *every* digit in the stem, which works

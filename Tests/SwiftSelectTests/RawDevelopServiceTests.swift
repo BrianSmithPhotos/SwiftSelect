@@ -288,4 +288,30 @@ final class RawDevelopServiceTests: XCTestCase {
         return (0.2126 * Double(pixel[0]) + 0.7152 * Double(pixel[1]) + 0.0722 * Double(pixel[2]))
             / 255
     }
+
+    // MARK: - Decoder-9 probe (the iPad's develop-or-mark choice)
+
+    func testProbeSaysYesForACameraDecoderNineLists() throws {
+        let source = sampleURL("DSCF5072.RAF")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path))
+
+        XCTAssertTrue(RawDevelopService.listsNewestDecoder(source))
+    }
+
+    func testProbeSaysNoForACameraDecoderNineDoesNotList() throws {
+        let source = cameraOffDecoderNine
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path))
+        try assertDecoderNineDoesNotList(source)
+
+        XCTAssertFalse(RawDevelopService.listsNewestDecoder(source))
+    }
+
+    /// `CIRAWFilter` opens any readable file and reports `["None"]`, which must not read as a yes.
+    func testProbeSaysNoForAFileThatIsNotARaw() throws {
+        let notRaw = temporaryJPEGURL()
+        try Data("not a raw file".utf8).write(to: notRaw)
+        defer { try? FileManager.default.removeItem(at: notRaw) }
+
+        XCTAssertFalse(RawDevelopService.listsNewestDecoder(notRaw))
+    }
 }

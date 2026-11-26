@@ -477,12 +477,18 @@ default settings, the point being Apple's engine applied to the file as the came
   processed check mark. Holding it means the derivative behaves like every other file for the rest of
   the review pass, and re-developing after the sweep is a couple of seconds from the RAW that is
   still there.
-- **iPad divergence**: iPadOS cannot write a DNG (ImageIO lists no DNG output type), so a body
-  outside the decoder-9 list cannot be developed there at all. The iPad instead offers **Mark for RAW
-  develop**, which stages a marker keyword in the sidecar and badges the tile; the marker rides
-  Process & Move into the destination `.xmp`, and the Mac's "Import from iPad" develops the file and
-  strips the marker. The marker is never shown in the keyword field and never reaches the library
-  copy's keywords.
+- **iPad divergence**: iPadOS cannot write a DNG (ImageIO lists no DNG output type), so the iPad
+  develops only the bodies its OS lists decoder 9 for (the OM-3 since iPadOS 27.3), probing one
+  file per camera at folder load. For those it offers **Develop RAW**, which renders into the same
+  app-storage staging as the Mac, splices the JPEG into the capture set and stages `RAW9` plus the
+  RAW's own description, keywords and GPS in the derivative's sidecar draft. Process & Move then
+  names and copies it like any other file. A spent derivative is trashed on the next load of its
+  folder.
+- For any other RAW (the S9 `.RW2` on 27.3) the iPad instead offers **Mark for RAW develop**, which
+  stages a marker keyword in the sidecar and badges the tile; the marker rides Process & Move into
+  the destination `.xmp`, and the Mac's "Import from iPad" develops the file via DNG and strips the
+  marker. The marker is never shown in the keyword field and never reaches the library copy's
+  keywords.
   - A develop failure at import time is reported but does not fail the import: the RAW itself is
     already verified into the library by then.
 
@@ -868,6 +874,21 @@ In priority order — the rest of the visualiser first.
 
   If built, it must be an opt-in second path. The existing develop route's value is that it is
   Apple's rendering and nothing else.
+
+- **Request downloadable RAW resources before developing.** Waiting on an Xcode-beta whose SDK
+  matches macOS/iOS 27.3. From macOS 27 beta 3 (release note 190766743), `CIRAWFilter` relies on
+  per-camera resources that are not part of the OS. They arrive as MobileAssets under
+  `/System/Library/AssetsV2/com_apple_MobileAsset_RawCamera_Camera/`, and on 2026-11-25 the OM-3
+  (with the OM-1 II), X-T5 and Sony A7 III came from there, while the S9 and X-E4 were built in.
+  Until a camera's asset has downloaded, a file reports only the OS's built-in decoders, which may
+  lack `9` or report none, so routing (§5 "RAW develop") quietly picks a different branch or fails.
+  The fix belongs in `RawDevelopService.develop`: when the probe shows no numbered decoder, or no
+  `9`, call `downloadResources(timeout:)` and probe again. The methods exist at runtime on 27.3
+  (`-downloadResourcesWithTimeout:completionHandler:` and
+  `+downloadAllResourcesWithTimeout:completionHandler:`), but not in the Xcode-beta 27.0 headers, and
+  the completion handler's signature is unconfirmed, so don't call them through the Objective-C
+  runtime. The iPad is where it matters most: in the field it may have no network when the RAW is
+  first opened.
 
 ## Deliberately out of scope (for now)
 

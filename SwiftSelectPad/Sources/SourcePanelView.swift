@@ -108,8 +108,13 @@ struct SourcePanelView: View {
                                         switch viewModel.sourceViewFilter {
                                         case .active:
                                             Button("Skip") { viewModel.skip(captureSet) }
-                                            // iPad can't develop a RAW itself, so this only records
-                                            // the request — the Mac's iPad import does the work.
+                                            // A RAW this OS lists decoder 9 for is developed here;
+                                            // any other only records the request, and the Mac's
+                                            // iPad import does the work (it needs a DNG).
+                                            if viewModel.canDevelopRAW(captureSet) {
+                                                Button("Develop RAW") { viewModel.developRAW(captureSet) }
+                                                    .disabled(viewModel.isDevelopingRAW)
+                                            }
                                             if viewModel.canMarkForRawDevelop(captureSet) {
                                                 Button(
                                                     viewModel.isMarkedForRawDevelop(captureSet)

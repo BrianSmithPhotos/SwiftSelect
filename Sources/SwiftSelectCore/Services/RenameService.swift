@@ -23,6 +23,30 @@ public struct RenameContext {
         self.batch = batch
         self.artFilterToken = artFilterToken
     }
+
+    /// The rename inputs for `asset` as it stands, shared by the preview and the process run on Mac
+    /// and iPad, so the name shown is the name written.
+    ///
+    /// A RAW-developed derivative needs both fields redirected. Its own filename is a
+    /// `RawDerivedStore` key, and `RenameService.sequence(from:)` harvests every digit in the stem,
+    /// so the leading file size would be absorbed into the frame number. The rename is handed a
+    /// stand-in built from the original's name instead, the same device `IPadImportService`
+    /// documents at `sequenceOnlyURL`. And the decoder token goes in the art-filter *filename* slot
+    /// while `asset.artFilterToken` stays empty: a RAW carries no in-camera effect, so the
+    /// "In camera effect ..." description note (`AutoMetadataRules`) must not fire for it.
+    public init(asset: PhotoAsset, batch: String) {
+        guard let original = asset.derivedFrom else {
+            self.init(
+                sourceURL: asset.url, capturedAt: asset.capturedAt, cameraModel: asset.cameraModel,
+                lensModel: asset.lensModel, batch: batch, artFilterToken: asset.artFilterToken)
+            return
+        }
+        self.init(
+            sourceURL: original.deletingPathExtension().appendingPathExtension(asset.url.pathExtension),
+            capturedAt: asset.capturedAt, cameraModel: asset.cameraModel,
+            lensModel: asset.lensModel, batch: batch,
+            artFilterToken: RawDevelopService.token(in: asset.keywords))
+    }
 }
 
 /// Computes the destination filename for a rename per docs/SPEC.md §4's

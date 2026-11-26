@@ -248,9 +248,20 @@ final class PhotoBrowserViewModel {
     /// Paths of RAW files in the currently loaded folder whose staged sidecar carries
     /// `RawDevelopService.developMarkerKeyword` — drives the tile badge, and is what
     /// `performSave` consults to keep the marker alive across an ordinary metadata save.
-    /// iPadOS can't develop a RAW itself (see that keyword's doc comment), so marking is the whole
-    /// of the iPad's part in this: the Mac's iPad import acts on it later.
+    /// Only RAWs outside `decoderNineRawPaths` are offered the marker: iPadOS can't write a DNG, so
+    /// for those the Mac's iPad import does the develop later.
     private(set) var developMarkedPaths: Set<String> = []
+
+    /// RAWs in the loaded folder this OS lists decoder 9 for, so the iPad develops them itself.
+    /// Probed once per camera body at load (`RawDevelopService.listsNewestDecoder`), since the list
+    /// is per body and opening a filter for every RAW on a card would slow the load for nothing.
+    private(set) var decoderNineRawPaths: Set<String> = []
+
+    /// Same store and layout the Mac uses: derivatives wait in Application Support until Process &
+    /// Move copies them out. `nil` only if that directory is unwritable, and then Develop RAW is
+    /// simply not offered.
+    private let rawDerivedStore: RawDerivedStore? = try? RawDerivedStore.makeDefault()
+    private(set) var isDevelopingRAW = false
 
     /// "Select mode" for the grid — while on, tapping a tile toggles `multiSelectedIDs` instead of
     /// changing the preview, and a batch Skip/Un-skip action bar becomes available. Turning it off
@@ -740,13 +751,7 @@ final class PhotoBrowserViewModel {
             renamePreviewFilename = ""
             return
         }
-        let context = RenameContext(
-            sourceURL: asset.url,
-            capturedAt: asset.capturedAt,
-            cameraModel: asset.cameraModel,
-            lensModel: asset.lensModel,
-            batch: sessionBatch,
-            artFilterToken: asset.artFilterToken)
+        let context = RenameContext(asset: asset, batch: sessionBatch)
         let candidate = renameService.buildFilename(for: context)
 
         var existingNames = Self.existingFileNames(in: asset.url.deletingLastPathComponent())
@@ -836,13 +841,16 @@ final class PhotoBrowserViewModel {
                 // GPS is staged per-target from the asset's own fields (a Timeline suggestion applied
                 // by `suggestGPSIfNeeded()`, or embedded GPS), not the shared buffer — each photo may
                 // carry its own fix. `title` stays nil (rename-derived, only written at Process time).
+                let stagedKeywords = keywordsToStage(keywords, for: target)
                 try await store.stage(
                     title: nil, description: description,
-                    keywords: keywordsToStage(keywords, for: target),
+                    keywords: stagedKeywords,
                     gps: Self.gpsCoordinate(for: target), for: target.url)
                 updateAsset(target.id) { updated in
                     updated.descriptionText = description
-                    updated.keywords = keywords
+                    // The token stays on the asset too, or the next save and the rename preview
+                    // would read a derivative with no `RAW9`.
+                    updated.keywords = RawDevelopService.removingDevelopMarker(from: stagedKeywords)
                 }
             } catch {
                 failureCount += 1
@@ -855,34 +863,47 @@ final class PhotoBrowserViewModel {
         return .saved(fileCount: targets.count, failureCount: failureCount)
     }
 
-    /// `keywords` plus the develop marker when this file is marked. A save rewrites the whole
-    /// sidecar, so without this an ordinary edit would quietly drop a pending develop request.
+    /// `keywords` plus whatever app bookkeeping the file carries: a derivative's decoder token and a
+    /// marked RAW's develop marker. A save rewrites the whole sidecar, and an AI suggestion fills
+    /// the editor with a fresh list, so without this a save would drop `RAW9` from the processed
+    /// name or quietly cancel a pending develop request.
     private func keywordsToStage(_ keywords: [String], for asset: PhotoAsset) -> [String] {
-        guard developMarkedPaths.contains(asset.url.path) else { return keywords }
-        return keywords + [RawDevelopService.developMarkerKeyword]
+        var staged = keywords
+        if let token = AutoMetadataRules.developToken(for: asset), RawDevelopService.token(in: keywords) == nil {
+            staged.append(token)
+        }
+        if developMarkedPaths.contains(asset.url.path) {
+            staged.append(RawDevelopService.developMarkerKeyword)
+        }
+        return staged
     }
 
     // MARK: - Mark for RAW develop (docs/SPEC.md §5)
 
-    /// RAW members are the only files a develop marker means anything on — a capture set's SOOC
-    /// JPEG is already developed.
-    private static func rawMembers(of captureSet: CaptureSet) -> [PhotoAsset] {
-        captureSet.members.filter { PhotoAssetLoader.isRaw($0.url) }
+    /// RAW members the iPad can't develop itself: the only files a develop marker means anything
+    /// on. A capture set's SOOC JPEG is already developed, and a RAW this OS lists decoder 9 for
+    /// is developed here instead (`developRAW`). The exception is one already marked, from before
+    /// its body joined the list: it stays so it can be unmarked, or the Mac develops it again.
+    private func markableRawMembers(of captureSet: CaptureSet) -> [PhotoAsset] {
+        captureSet.members.filter {
+            PhotoAssetLoader.isRaw($0.url)
+                && (!decoderNineRawPaths.contains($0.url.path) || developMarkedPaths.contains($0.url.path))
+        }
     }
 
     func canMarkForRawDevelop(_ captureSet: CaptureSet) -> Bool {
-        !Self.rawMembers(of: captureSet).isEmpty
+        !markableRawMembers(of: captureSet).isEmpty
     }
 
     func isMarkedForRawDevelop(_ captureSet: CaptureSet) -> Bool {
-        Self.rawMembers(of: captureSet).contains { developMarkedPaths.contains($0.url.path) }
+        markableRawMembers(of: captureSet).contains { developMarkedPaths.contains($0.url.path) }
     }
 
-    /// Marks (or unmarks) every RAW in `captureSet` for the Mac to develop at import time. The
-    /// marker is a keyword in the staged sidecar rather than a new store of its own, so it travels
-    /// through Process & Move into the destination copy's `.xmp` with no new transport.
+    /// Marks (or unmarks) every markable RAW in `captureSet` for the Mac to develop at import time.
+    /// The marker is a keyword in the staged sidecar rather than a new store of its own, so it
+    /// travels through Process & Move into the destination copy's `.xmp` with no new transport.
     func toggleRawDevelopMark(_ captureSet: CaptureSet) {
-        let targets = Self.rawMembers(of: captureSet)
+        let targets = markableRawMembers(of: captureSet)
         guard !targets.isEmpty else { return }
         let shouldMark = !isMarkedForRawDevelop(captureSet)
         Task {
@@ -915,6 +936,112 @@ final class PhotoBrowserViewModel {
             saveStatusMessage =
                 "Could not mark \(asset.url.lastPathComponent) for RAW develop: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Develop RAW on device (docs/SPEC.md §5)
+
+    /// Whether `captureSet` holds a RAW this OS lists decoder 9 for that has no derivative yet.
+    /// Answers from the loaded sets, like the Mac's `canDevelopRAW(scope:)`: derivatives are merged
+    /// in at load, so "already developed" is just "some member points back at this RAW".
+    func canDevelopRAW(_ captureSet: CaptureSet) -> Bool {
+        rawDerivedStore != nil && !developableRawMembers(of: captureSet).isEmpty
+    }
+
+    private func developableRawMembers(of captureSet: CaptureSet) -> [PhotoAsset] {
+        let developed = Set(captureSet.members.compactMap(\.derivedFrom))
+        return captureSet.members.filter {
+            decoderNineRawPaths.contains($0.url.path) && !developed.contains($0.url)
+        }
+    }
+
+    /// Renders each developable RAW in `captureSet` at decoder 9 into `RawDerivedStore` and splices
+    /// the results into the grid, beside their originals. The Mac's `developRAW(scope:)` minus the
+    /// DNG route, which these files never need.
+    ///
+    /// The `RAW9` token goes into the derivative's staged sidecar, not the JPEG: the iPad has no
+    /// exiftool, and the staged draft is already where load, save and Process & Move read keywords
+    /// from here, so the token reaches the processed filename with no new channel. The RAW's own
+    /// staged description, keywords and GPS come along too, as the Mac's iPad import does for a
+    /// marked RAW, so a set described before developing doesn't need describing again.
+    func developRAW(_ captureSet: CaptureSet) {
+        guard !isDevelopingRAW, let store = rawDerivedStore else { return }
+        let targets = developableRawMembers(of: captureSet)
+        guard !targets.isEmpty else { return }
+        let folderURL = breadcrumb.last
+
+        isDevelopingRAW = true
+        processStatusMessage = "Developing \(targets.count) RAW file(s)…"
+        Task {
+            defer { isDevelopingRAW = false }
+            guard let stagingStore = await ensureSidecarStagingStore() else { return }
+            let service = RawDevelopService()
+            var failures: [String] = []
+            var developed: [PhotoAsset] = []
+            for (index, target) in targets.enumerated() {
+                processStatusMessage =
+                    "Developing \(index + 1) of \(targets.count): \(target.url.lastPathComponent)…"
+                do {
+                    let destination = try store.derivedURL(for: target.url)
+                    let result = try await service.develop(target.url, to: destination)
+                    try await stagingStore.stage(
+                        title: nil, description: target.descriptionText,
+                        keywords: target.keywords + [result.token],
+                        gps: Self.gpsCoordinate(for: target), for: destination)
+                    developed.append(target)
+                } catch {
+                    failures.append("\(target.url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+
+            // Spliced in rather than reloaded, for the Mac's reason: only the staged derivatives
+            // changed on disk. Skipped if the user navigated away; the next load finds them.
+            if breadcrumb.last == folderURL, !developed.isEmpty {
+                let derived = await applyStagedDrafts(to: store.derivedAssets(forOriginals: developed)).assets
+                automaticCaptureSets = CaptureGroupingService.inserting(derived, into: automaticCaptureSets)
+                rederiveCaptureSets()
+            }
+            let successCount = targets.count - failures.count
+            processStatusMessage =
+                failures.isEmpty
+                ? "Developed \(successCount) RAW file(s)."
+                : "Developed \(successCount)/\(targets.count); \(failures.count) failed:\n"
+                    + failures.joined(separator: "\n")
+        }
+    }
+
+    /// Which of `assets`' RAWs list decoder 9, probed once per camera body: the list is per body,
+    /// and opening a filter for every RAW on a card would slow the load for nothing. Detached
+    /// because opening the filter reads the file.
+    private static func decoderNineRawPaths(in assets: [PhotoAsset]) async -> Set<String> {
+        let rawsByModel = Dictionary(
+            grouping: assets.filter { PhotoAssetLoader.isRaw($0.url) }, by: \.cameraModel)
+        return await Task.detached {
+            var paths: Set<String> = []
+            for members in rawsByModel.values where RawDevelopService.listsNewestDecoder(members[0].url) {
+                paths.formUnion(members.map(\.url.path))
+            }
+            return paths
+        }.value
+    }
+
+    /// The staged derivatives of `assets`' RAWs, after trashing any that Process & Move has already
+    /// copied out. A spent one goes on the next load rather than at process time, as on the Mac:
+    /// trashing it straight away would pull the tile the user just processed out of the grid.
+    /// Nothing is lost either way, since the RAW is still on the card.
+    private func stagedDerivatives(for assets: [PhotoAsset]) -> [PhotoAsset] {
+        guard let store = rawDerivedStore else { return [] }
+        let raws = assets.filter { PhotoAssetLoader.isRaw($0.url) }
+        for raw in raws {
+            guard let url = try? store.derivedURL(for: raw.url), processedAssetPaths.contains(url.path)
+            else { continue }
+            do {
+                try store.discard(for: raw.url)
+            } catch {
+                Self.loadLogger.error(
+                    "Could not trash spent derivative \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return store.derivedAssets(forOriginals: raws)
     }
 
     /// Puts every previously staged edit back onto the just-loaded assets, and collects which RAWs
@@ -1033,13 +1160,7 @@ final class PhotoBrowserViewModel {
                             asset: asset, batch: sessionBatch,
                             destinationRoot: IPadVideoBundle.stagingRoot(in: libraryRootURL))
                     } else {
-                        let context = RenameContext(
-                            sourceURL: asset.url,
-                            capturedAt: asset.capturedAt,
-                            cameraModel: asset.cameraModel,
-                            lensModel: asset.lensModel,
-                            batch: sessionBatch,
-                            artFilterToken: asset.artFilterToken)
+                        let context = RenameContext(asset: asset, batch: sessionBatch)
                         _ = try await processMoveService.processAndCopy(
                             asset: asset, renameContext: context, libraryRoot: libraryRootURL,
                             identity: identityByID[asset.id])
@@ -1168,9 +1289,13 @@ final class PhotoBrowserViewModel {
                 let assetsAt = Date()
                 skippedPaths = await skippedAssetPaths(inFolder: folderURL)
                 processedAssetPaths = await loadProcessedAssetPaths(inFolder: folderURL)
-                let staged = await applyStagedDrafts(to: loadedAssets)
+                // RAW-developed JPEGs live in app storage rather than this folder, so they're merged
+                // in before grouping, and before the staged-draft pass, which carries their token.
+                let derived = stagedDerivatives(for: loadedAssets)
+                let staged = await applyStagedDrafts(to: loadedAssets + derived)
                 var assets = staged.assets
                 developMarkedPaths = staged.developMarkedPaths
+                decoderNineRawPaths = await Self.decoderNineRawPaths(in: loadedAssets)
                 let stagedAt = Date()
                 // The same camera signals the Mac groups on, read straight out of the frame's own
                 // bytes. exiftool cannot run here and ImageIO exposes no maker-note dictionary, but

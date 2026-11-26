@@ -1,13 +1,11 @@
 import XCTest
 
-@testable import SwiftSelect
 @testable import SwiftSelectCore
 
-/// Covers `SourceBrowserViewModel.renameContext(for:batch:)` — the point where a RAW-developed
+/// Covers `RenameContext(asset:batch:)` — the point where a RAW-developed
 /// derivative's two filename rules are applied. Both are silent when wrong: the frame number just
 /// comes out different, and the decoder token just goes missing.
-@MainActor
-final class SourceBrowserRenameContextTests: XCTestCase {
+final class RenameContextTests: XCTestCase {
     private func makeDerived() -> PhotoAsset {
         // The name a `RawDerivedStore` key really produces: file size, then the original's full name.
         var asset = PhotoAsset(id: URL(fileURLWithPath: "/staging/19763130_P1066411.ORF.jpg"))
@@ -20,7 +18,7 @@ final class SourceBrowserRenameContextTests: XCTestCase {
     /// `RenameService.sequence(from:)` harvests every digit in the stem, so handing it the staging
     /// name would fold the file size into the frame number.
     func testDerivedAssetIsRenamedFromTheOriginalsNameNotItsStagingKey() {
-        let context = SourceBrowserViewModel.renameContext(for: makeDerived(), batch: "SanRafael")
+        let context = RenameContext(asset: makeDerived(), batch: "SanRafael")
 
         XCTAssertEqual(context.sourceURL.lastPathComponent, "P1066411.jpg")
         // `sequence(from:)` is private, so this asserts through the filename it feeds.
@@ -28,7 +26,7 @@ final class SourceBrowserRenameContextTests: XCTestCase {
     }
 
     func testDerivedAssetPutsTheDecoderTokenInTheArtFilterSlot() {
-        let context = SourceBrowserViewModel.renameContext(for: makeDerived(), batch: "SanRafael")
+        let context = RenameContext(asset: makeDerived(), batch: "SanRafael")
 
         XCTAssertEqual(context.artFilterToken, "RAW9")
     }
@@ -38,7 +36,7 @@ final class SourceBrowserRenameContextTests: XCTestCase {
         var asset = PhotoAsset(id: URL(fileURLWithPath: "/card/DCIM/P1066411.JPG"))
         asset.artFilterToken = "Grainy Film"
 
-        let context = SourceBrowserViewModel.renameContext(for: asset, batch: "SanRafael")
+        let context = RenameContext(asset: asset, batch: "SanRafael")
 
         XCTAssertEqual(context.sourceURL, asset.url)
         XCTAssertEqual(context.artFilterToken, "Grainy Film")

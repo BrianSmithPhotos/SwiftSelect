@@ -149,6 +149,16 @@ public struct RawDevelopService {
             token: token(forDecoderVersion: decoderVersion))
     }
 
+    /// Whether this OS lists decoder 9 for `url` itself, so it can be developed with no DNG
+    /// converter. The iPad asks this to choose between developing a RAW and marking it for the Mac.
+    /// It asks the OS rather than a hardcoded camera list, because Apple widens the list in
+    /// point updates (macOS 27.3 added the OM-3). Opening the filter reads the file's header, so callers
+    /// probe one file per camera body rather than every RAW on a card.
+    public static func listsNewestDecoder(_ url: URL) -> Bool {
+        guard let filter = CIRAWFilter(imageURL: url) else { return false }
+        return filter.supportedDecoderVersions.map(\.rawValue).contains(newestDecoderVersion)
+    }
+
     /// Pure, so the routing can be tested without a RAW file on disk — see `RawDevelopServiceTests`.
     public static func route(supportedVersions: [String], hasDNGConverter: Bool) -> RawDevelopRoute {
         if supportedVersions.contains(newestDecoderVersion) {

@@ -2016,7 +2016,7 @@ final class SourceBrowserViewModel {
                             destinationRoot: VideoMoveService.defaultDestinationRoot)
                         movedVideoCount += 1
                     } else {
-                        let context = Self.renameContext(for: asset, batch: sessionBatch)
+                        let context = RenameContext(asset: asset, batch: sessionBatch)
                         _ = try await processMoveService.processAndCopy(
                             asset: asset, renameContext: context, libraryRoot: libraryRoot,
                             identity: identityByID[asset.id])
@@ -2156,37 +2156,6 @@ final class SourceBrowserViewModel {
         }
     }
 
-    /// The rename inputs for `asset`, shared by the preview and the actual process run so the name
-    /// shown is the name written.
-    ///
-    /// A RAW-developed derivative needs both fields redirected. Its own filename is a
-    /// `RawDerivedStore` key, and `RenameService.sequence(from:)` harvests every digit in the stem,
-    /// so the leading file size would be absorbed into the frame number — the rename is handed a
-    /// stand-in built from the original's name instead, the same device `IPadImportService`
-    /// documents at `sequenceOnlyURL`. And the decoder token goes in the art-filter *filename* slot
-    /// while `asset.artFilterToken` stays empty: an ORF carries no in-camera effect, so the
-    /// "In camera effect …" description note (`AutoMetadataRules`) must not fire for it.
-    /// Internal rather than private so the derived-asset rules above can be unit tested without
-    /// standing up a whole browsing session.
-    static func renameContext(for asset: PhotoAsset, batch: String) -> RenameContext {
-        guard let original = asset.derivedFrom else {
-            return RenameContext(
-                sourceURL: asset.url,
-                capturedAt: asset.capturedAt,
-                cameraModel: asset.cameraModel,
-                lensModel: asset.lensModel,
-                batch: batch,
-                artFilterToken: asset.artFilterToken)
-        }
-        return RenameContext(
-            sourceURL: original.deletingPathExtension().appendingPathExtension(asset.url.pathExtension),
-            capturedAt: asset.capturedAt,
-            cameraModel: asset.cameraModel,
-            lensModel: asset.lensModel,
-            batch: batch,
-            artFilterToken: RawDevelopService.token(in: asset.keywords))
-    }
-
     /// Recomputes `renamePreviewFilename` for `selectedAsset` against `sessionBatch`'s current
     /// value — see that property's doc comment for why this exists and when it's called.
     private func updateRenamePreview() {
@@ -2194,7 +2163,7 @@ final class SourceBrowserViewModel {
             renamePreviewFilename = ""
             return
         }
-        let candidate = renameService.buildFilename(for: Self.renameContext(for: asset, batch: sessionBatch))
+        let candidate = renameService.buildFilename(for: RenameContext(asset: asset, batch: sessionBatch))
 
         var existingNames = Self.existingFileNames(in: asset.url.deletingLastPathComponent())
         existingNames.remove(asset.url.lastPathComponent)
