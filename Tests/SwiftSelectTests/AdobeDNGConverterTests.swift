@@ -25,6 +25,24 @@ final class AdobeDNGConverterTests: XCTestCase {
         return url
     }
 
+    /// A body decoder 9 does not list, which the via-DNG claim needs. macOS 27.3 added the OM-3 to
+    /// that list, so the ORF above can no longer stand in for one.
+    private func sampleXE4() throws -> URL {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "samples/May 17, 2022-untitled-1324-09-11-Fujifilm-X-E4-XF27mmF2.8 R WR-"
+                    + "Angels_Palace_Kodachrome-May 17 2022-1324.RAF")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: url.path))
+        let versions = try XCTUnwrap(CIRAWFilter(imageURL: url)).supportedDecoderVersions.map(\.rawValue)
+        XCTAssertFalse(
+            versions.contains("9"),
+            "This macOS now lists decoder 9 for the X-E4; pick a sample it doesn't")
+        return url
+    }
+
     private func makeScratchDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AdobeDNGConverterTests-\(UUID().uuidString)")
@@ -50,11 +68,11 @@ final class AdobeDNGConverterTests: XCTestCase {
         XCTAssertTrue(filter.supportedDecoderVersions.map(\.rawValue).contains("9.dng"))
     }
 
-    /// The end-to-end branch-2 claim: an OM-3 file, which on its own reports only decoders 7 and 8,
+    /// The end-to-end branch-2 claim: an X-E4 file, which on its own reports only decoders 7 and 8,
     /// renders at 9 once a converter is available, and the EXIF that lets the derivative join its
     /// original's capture set survives the round trip.
     func testDevelopViaDNGRendersAtDecoderNineAndKeepsCaptureMetadata() async throws {
-        let source = try sampleORF()
+        let source = try sampleXE4()
         let converter = try makeConverter()
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent("AdobeDNGConverterTests-\(UUID().uuidString).jpg")
@@ -71,9 +89,9 @@ final class AdobeDNGConverterTests: XCTestCase {
         let tiff = properties?[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
         let exif = properties?[kCGImagePropertyExifDictionary] as? [CFString: Any]
 
-        XCTAssertEqual(properties?[kCGImagePropertyPixelWidth] as? Int, 5184)
-        XCTAssertEqual(properties?[kCGImagePropertyPixelHeight] as? Int, 3888)
-        XCTAssertEqual(tiff?[kCGImagePropertyTIFFModel] as? String, "OM-3")
+        XCTAssertEqual(properties?[kCGImagePropertyPixelWidth] as? Int, 6240)
+        XCTAssertEqual(properties?[kCGImagePropertyPixelHeight] as? Int, 4160)
+        XCTAssertEqual(tiff?[kCGImagePropertyTIFFModel] as? String, "X-E4")
         XCTAssertNotNil(exif?[kCGImagePropertyExifDateTimeOriginal] as? String)
     }
 }

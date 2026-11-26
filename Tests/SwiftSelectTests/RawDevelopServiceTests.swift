@@ -158,11 +158,27 @@ final class RawDevelopServiceTests: XCTestCase {
         }
     }
 
+    /// A body decoder 9 does not list. Apple extends that list in OS updates — macOS 27.3 added the
+    /// OM-3, which these tests used to rely on — so each test checks the premise first.
+    private var cameraOffDecoderNine: URL {
+        sampleURL(
+            "May 17, 2022-untitled-1324-09-11-Fujifilm-X-E4-XF27mmF2.8 R WR-"
+                + "Angels_Palace_Kodachrome-May 17 2022-1324.RAF")
+    }
+
+    private func assertDecoderNineDoesNotList(_ source: URL) throws {
+        let versions = try XCTUnwrap(CIRAWFilter(imageURL: source)).supportedDecoderVersions.map(\.rawValue)
+        XCTAssertFalse(
+            versions.contains("9"),
+            "This macOS now lists decoder 9 for \(source.lastPathComponent); pick a sample it doesn't")
+    }
+
     /// Proves the branch choice against a real file rather than a hand-written version list: the
-    /// OM-3 is not on the decoder-9 list, so a converter must be reached for.
+    /// X-E4 is not on the decoder-9 list, so a converter must be reached for.
     func testDevelopReachesForTheConverterOnACameraDecoderNineDoesNotList() async throws {
-        let source = sampleURL("1066411_SanRafael_20260727_0929_OM-3_OM-100-400mm-F5.0-6.3-II.orf")
+        let source = cameraOffDecoderNine
         try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path))
+        try assertDecoderNineDoesNotList(source)
 
         let converter = SpyDNGConverter()
         do {
@@ -176,8 +192,9 @@ final class RawDevelopServiceTests: XCTestCase {
 
     /// The same file with no converter takes branch 3 and really renders, at v8.
     func testDevelopRendersAtTheNewestAvailableDecoderWithNoConverter() async throws {
-        let source = sampleURL("1066411_SanRafael_20260727_0929_OM-3_OM-100-400mm-F5.0-6.3-II.orf")
+        let source = cameraOffDecoderNine
         try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path))
+        try assertDecoderNineDoesNotList(source)
 
         let destination = temporaryJPEGURL()
         defer { try? FileManager.default.removeItem(at: destination) }
