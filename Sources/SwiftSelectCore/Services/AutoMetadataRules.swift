@@ -19,7 +19,14 @@ public enum AutoMetadataRules {
     /// but emphatically not straight out of camera — Apple's RAW engine rendered it, which is the
     /// whole reason it exists.
     public static func soocToken(for asset: PhotoAsset) -> String {
-        asset.derivedFrom == nil ? soocToken(for: asset.url) : ""
+        isDeveloped(asset) ? "" : soocToken(for: asset.url)
+    }
+
+    /// A `RawDevelopService` output, recognised by `derivedFrom` where the original is known, or by
+    /// its decoder keyword where it isn't: a JPEG developed on the iPad reaches the Mac's import as
+    /// a plain `.jpg`, and `RAW9` in its keywords is the only trace of how it was made.
+    static func isDeveloped(_ asset: PhotoAsset) -> Bool {
+        asset.derivedFrom != nil || RawDevelopService.token(in: asset.keywords) != nil
     }
 
     /// The in-camera look string for Instructions, or empty when the file never received that
@@ -34,7 +41,7 @@ public enum AutoMetadataRules {
     /// `soocToken(for:)`'s `derivedFrom` test: a JPEG by extension, but Apple's rendering of the
     /// RAW rather than the camera's.
     public static func cameraLookInstructions(for asset: PhotoAsset) -> String {
-        guard !PhotoAssetLoader.isRaw(asset.url), asset.derivedFrom == nil else { return "" }
+        guard !PhotoAssetLoader.isRaw(asset.url), !isDeveloped(asset) else { return "" }
         return asset.cameraLookSummary
     }
 
@@ -51,21 +58,27 @@ public enum AutoMetadataRules {
     }
 
     /// Appends develop/camera/lens/art-filter/SOOC tokens to `keywords`, case-insensitively
-    /// de-duplicated against what's already there and against each other. Blank tokens are skipped.
+    /// de-duplicated against each other. Blank tokens are skipped.
+    ///
+    /// A keyword matching a token apart from case takes the token's own spelling, in place. AI
+    /// providers are fed the existing keywords and asked for lowercase ones, so they echo `RAW9`
+    /// back as `raw9`; keeping whichever came first left the AI's spelling on the file.
     public static func keywordsWithAutoTokens(
         _ keywords: [String], developToken: String? = nil, artFilterToken: String?,
         cameraToken: String?, lensToken: String?, soocToken: String
     ) -> [String] {
-        var seenLowercased = Set(keywords.map { $0.lowercased() })
-        var result = keywords
-        let candidates = [
-            developToken ?? "", artFilterToken ?? "", cameraToken ?? "", lensToken ?? "", soocToken,
-        ]
-        for candidate in candidates {
-            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, !seenLowercased.contains(trimmed.lowercased()) else { continue }
-            seenLowercased.insert(trimmed.lowercased())
-            result.append(trimmed)
+        let tokens = [developToken ?? "", artFilterToken ?? "", cameraToken ?? "", lensToken ?? "", soocToken]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        // First spelling wins among the tokens themselves, matching the old de-duplication.
+        var tokenByLowercased: [String: String] = [:]
+        for token in tokens where tokenByLowercased[token.lowercased()] == nil {
+            tokenByLowercased[token.lowercased()] = token
+        }
+        var seenLowercased = Set<String>()
+        var result: [String] = []
+        for keyword in keywords + tokens where seenLowercased.insert(keyword.lowercased()).inserted {
+            result.append(tokenByLowercased[keyword.lowercased()] ?? keyword)
         }
         return result
     }

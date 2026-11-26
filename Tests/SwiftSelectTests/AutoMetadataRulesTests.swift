@@ -24,6 +24,15 @@ final class AutoMetadataRulesTests: XCTestCase {
         XCTAssertEqual(AutoMetadataRules.soocToken(for: PhotoAsset(id: URL(fileURLWithPath: "/tmp/P1010042.JPG"))), "sooc")
     }
 
+    /// An iPad-developed JPEG reaches the Mac's import as a plain .jpg with no `derivedFrom`; its
+    /// decoder keyword alone must keep `sooc` off it.
+    func testSoocTokenForAJPEGCarryingADecoderKeywordIsEmpty() {
+        var imported = PhotoAsset(id: URL(fileURLWithPath: "/tmp/K1096204.jpg"))
+        imported.keywords = ["moon", "RAW9"]
+
+        XCTAssertEqual(AutoMetadataRules.soocToken(for: imported), "")
+    }
+
     // MARK: - cameraLookInstructions
 
     /// The look an ORF and its sibling JPEG both parse to. Measured on H1071885 (2026-08-09): the
@@ -107,11 +116,13 @@ final class AutoMetadataRulesTests: XCTestCase {
         XCTAssertEqual(keywords, ["sunset"])
     }
 
-    func testKeywordsWithAutoTokensDeduplicatesCaseInsensitively() {
+    /// An AI provider echoes the existing tokens back lowercased; the app's spelling must win, once.
+    func testKeywordsWithAutoTokensReplacesAnyCaseVariantWithTheTokenSpelling() {
         let keywords = AutoMetadataRules.keywordsWithAutoTokens(
-            ["OM-1", "sooc"], artFilterToken: nil, cameraToken: "om-1", lensToken: nil, soocToken: "SOOC")
+            ["marina", "raw9", "om-3"], developToken: "RAW9", artFilterToken: nil,
+            cameraToken: "OM-3", lensToken: nil, soocToken: "")
 
-        XCTAssertEqual(keywords, ["OM-1", "sooc"])
+        XCTAssertEqual(keywords, ["marina", "RAW9", "OM-3"])
     }
 
     // MARK: - descriptionWithArtFilterNote
